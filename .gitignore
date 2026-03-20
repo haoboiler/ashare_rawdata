@@ -1,0 +1,9 @@
+.env
+.claude-tmp/
+.claude-output/
+orchestration/state/
+orchestration/logs/
+orchestration/config.yaml
+__pycache__/
+*.pyc
+FOCUS.md
