@@ -28,7 +28,7 @@
 
 ## 关键路径
 
-- 本地计算: `scripts/compute_rawdata_local.py`
+- 本地计算: `scripts/compute_rawdata_local.py`（见 `docs/COMPUTE.md`，推荐 `--use-preload`）
 - 回测评估: `/home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py`（见 BACKTEST.md）
 - 相关性检测: `scripts/admission_corr_check.py --cache .claude-output/pnl_cache/pnl_cache.pkl`
 - PnL 缓存: `.claude-output/pnl_cache/pnl_cache.pkl`（141 fields）

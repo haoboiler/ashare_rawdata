@@ -109,11 +109,15 @@ ls -lt research/agent_reports/feedback/ | head -10
 
 #### Step B: 本地计算
 
+> **完整说明见 `docs/COMPUTE.md`**。推荐使用 Ray 加速模式。
+
 ```bash
 cd /home/gkh/claude_tasks/ashare_rawdata
 # 快速验证（100 symbol，~2 分钟）
 python scripts/compute_rawdata_local.py --formula-file {script.py} --quick -o .claude-output/analysis/{direction}/
-# 全量（~30-60 分钟）
+# Ray 加速全量（~18 分钟，需先 preload）
+python scripts/compute_rawdata_local.py --formula-file {script.py} --use-preload --num-workers 32 -o .claude-output/analysis/{direction}/
+# 串行全量（无 Ray 时备选，~30-60 分钟）
 python scripts/compute_rawdata_local.py --formula-file {script.py} -o .claude-output/analysis/{direction}/
 ```
 

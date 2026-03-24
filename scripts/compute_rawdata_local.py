@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -133,6 +134,49 @@ def _time_filter_to_bar_mask(time_filter: List[Tuple[str, str]]) -> np.ndarray:
         bar_end = min(BARS_PER_DAY, _time_str_to_bar_index(end_str))
         mask[bar_start:bar_end] = True
     return mask
+
+
+def _build_symbol_3d_array(
+    df: pd.DataFrame,
+    trading_days: List,
+    all_fields: List[str],
+) -> np.ndarray:
+    """Convert one symbol's 1m DataFrame to (n_days, 240, n_fields) float64 array."""
+    n_days = len(trading_days)
+    n_fields = len(all_fields)
+    arr = np.full((n_days, BARS_PER_DAY, n_fields), np.nan, dtype=np.float64)
+    if df is None or df.empty:
+        return arr
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df = df.copy()
+        df.index = pd.to_datetime(df.index)
+    if df.index.tz is not None:
+        df = df.copy()
+        df.index = df.index.tz_localize(None)
+
+    day_to_idx = {d: i for i, d in enumerate(trading_days)}
+    dates = df.index.date
+    hours = df.index.hour.values
+    minutes = df.index.minute.values
+    bar_idx = np.where(
+        hours < 12,
+        (hours - 9) * 60 + minutes - 30,
+        (hours - 13) * 60 + minutes + 120,
+    )
+    valid_bars = (bar_idx >= 0) & (bar_idx < BARS_PER_DAY)
+
+    for date_val in np.unique(dates):
+        di = day_to_idx.get(date_val)
+        if di is None:
+            continue
+        date_mask = (dates == date_val) & valid_bars
+        bi = bar_idx[date_mask]
+        for fi, field in enumerate(all_fields):
+            if field in df.columns:
+                arr[di, bi, fi] = df[field].values[date_mask].astype(np.float64)
+
+    return arr
 
 
 # ---------------------------------------------------------------------------
@@ -335,9 +379,7 @@ def compute_fast(definition, symbols, start_date="2020-01-01", end_date="2024-12
                  num_workers=32):
     """Ray parallel computation."""
     import ray
-
-    if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
+    _ray_init()
 
     conn = Arctic(ARCTIC_URL)
     source_lib = conn.get_library(DEFAULT_SOURCE_LIBRARY, create_if_missing=False)
@@ -409,58 +451,225 @@ def compute_fast(definition, symbols, start_date="2020-01-01", end_date="2024-12
 # Preload (Ray actor)
 # ---------------------------------------------------------------------------
 
-def run_preload(start_date="2020-01-01", end_date="2024-12-31"):
-    """Preload 1m data into Ray object store for fast repeated compute."""
+RAY_NAMESPACE = "ashare_rawdata"
+RAY_ADDRESS = "192.168.0.107:26380"
+
+
+def _ray_init():
+    """Initialize Ray, connecting to persistent head."""
     import ray
-
     if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
+        addr = os.environ.get("RAY_ADDRESS", RAY_ADDRESS)
+        ray.init(address=addr, ignore_reinit_error=True, namespace=RAY_NAMESPACE)
 
-    conn = Arctic(ARCTIC_URL)
-    source_lib = conn.get_library(DEFAULT_SOURCE_LIBRARY, create_if_missing=False)
-    all_symbols = sorted(source_lib.list_symbols())
 
-    logger.info(f"Preloading {len(all_symbols)} symbols [{start_date} ~ {end_date}]...")
-    t0 = time.time()
+def run_preload(start_date="2020-01-01", end_date="2024-12-31"):
+    """Preload 1m data into Ray actor. Data lives inside the actor, survives caller exit."""
+    import ray
+    _ray_init()
 
-    refs = {}
-    loaded = 0
-    for i, sym in enumerate(all_symbols):
-        try:
-            df = source_lib.read(sym, date_range=(start_date, end_date)).data
-            refs[sym] = ray.put(df)
-            loaded += 1
-        except Exception:
-            pass
-        if (i + 1) % 500 == 0:
-            logger.info(f"  ...{i+1}/{len(all_symbols)} ({time.time()-t0:.0f}s)")
-
-    elapsed = time.time() - t0
-    logger.info(f"Preload done: {loaded} symbols in {elapsed:.0f}s")
-
-    # Store refs in a named actor
+    # Define actor class that loads data internally
     @ray.remote
     class _PreloadStore:
-        def __init__(self, refs, symbols):
-            self.refs = refs
-            self.symbols = symbols
-        def get_refs(self):
-            return self.refs
+        def __init__(self):
+            self.kline_refs = {}
+            self.symbols = []
+            self.trading_days = []
+            self.fields = list(_ALL_FIELDS)
+            self._stats = {}
+
+        def load(self, arctic_url, lib_name, start_date, end_date):
+            from arcticdb import Arctic as _Arc
+            conn = _Arc(arctic_url)
+            lib = conn.get_library(lib_name, create_if_missing=False)
+            all_syms = sorted(lib.list_symbols())
+            ts_start = pd.Timestamp(start_date)
+            ts_end = pd.Timestamp(end_date)
+            loaded = 0
+            total_bytes = 0
+            for i, sym in enumerate(all_syms):
+                try:
+                    df = lib.read(sym, date_range=(ts_start, ts_end)).data
+                    if not df.empty:
+                        if not self.trading_days:
+                            days = sorted(df.index.normalize().unique())
+                            self.trading_days = [d.date() for d in days]
+                        arr = _build_symbol_3d_array(df, self.trading_days, self.fields)
+                        self.kline_refs[sym] = ray.put(arr)
+                        total_bytes += arr.nbytes
+                        loaded += 1
+                except Exception:
+                    pass
+                if (i + 1) % 500 == 0:
+                    print(f"  ...{i+1}/{len(all_syms)} loaded")
+            self.symbols = list(self.kline_refs.keys())
+            self._stats = {
+                "loaded": loaded,
+                "total": len(all_syms),
+                "n_days": len(self.trading_days),
+                "n_fields": len(self.fields),
+                "total_gb": round(total_bytes / 1e9, 2),
+                "array_shape": f"({len(self.trading_days)}, {BARS_PER_DAY}, {len(self.fields)})",
+            }
+            return self._stats
+
+        def get_symbol_refs_batch(self, symbols):
+            return {s: self.kline_refs[s] for s in symbols if s in self.kline_refs}
+
         def get_symbols(self):
             return self.symbols
 
+        def get_trading_days(self):
+            return self.trading_days
+
+        def get_fields(self):
+            return self.fields
+
+        def get_metadata(self):
+            return {
+                "symbols": self.symbols,
+                "trading_days": self.trading_days,
+                "fields": self.fields,
+                "stats": self._stats,
+            }
+
+        def get_stats(self):
+            return self._stats
+
+    # Kill existing actor if any
     try:
-        ray.get_actor(RAY_PRELOAD_ACTOR)
-        logger.info(f"Replacing existing preload actor...")
-        ray.kill(ray.get_actor(RAY_PRELOAD_ACTOR))
+        old = ray.get_actor(RAY_PRELOAD_ACTOR, namespace=RAY_NAMESPACE)
+        ray.kill(old)
+        logger.info("Killed existing preload actor")
+        time.sleep(1)
     except ValueError:
         pass
 
+    # Create new actor and load data inside it
     store = _PreloadStore.options(
         name=RAY_PRELOAD_ACTOR, lifetime="detached", num_cpus=0,
-    ).remote(refs, list(refs.keys()))
-    logger.info(f"Preload actor '{RAY_PRELOAD_ACTOR}' ready with {loaded} symbols")
-    return loaded
+        namespace=RAY_NAMESPACE,
+    ).remote()
+
+    logger.info(f"Loading data inside actor [{start_date} ~ {end_date}]...")
+    t0 = time.time()
+    stats = ray.get(store.load.remote(ARCTIC_URL, DEFAULT_SOURCE_LIBRARY, start_date, end_date))
+    elapsed = time.time() - t0
+    logger.info(
+        f"Preload done: {stats['loaded']}/{stats['total']} symbols in {elapsed:.0f}s "
+        f"(shape={stats['array_shape']}, {stats['total_gb']:.2f} GB)"
+    )
+    logger.info(f"Actor '{RAY_PRELOAD_ACTOR}' ready (namespace={RAY_NAMESPACE})")
+    return stats["loaded"]
+
+
+def compute_fast_preload(definition, num_workers=32):
+    """Compute using preloaded data from Ray actor. Ultra fast (~5-10s)."""
+    import ray
+    _ray_init()
+
+    # Get preloaded data from actor
+    store = ray.get_actor(RAY_PRELOAD_ACTOR, namespace=RAY_NAMESPACE)
+    metadata = ray.get(store.get_metadata.remote())
+    symbols = metadata["symbols"]
+    trading_days = metadata["trading_days"]
+    all_fields = metadata["fields"]
+    logger.info(f"  Using preloaded data: {len(symbols)} symbols")
+    date_index = pd.DatetimeIndex([pd.Timestamp(d) for d in trading_days])
+    logger.info(f"  {len(symbols)} symbols, {len(trading_days)} trading days")
+
+    # Resolve field indices and bar mask
+    field_to_idx = {f: i for i, f in enumerate(all_fields)}
+    resolved_inputs = [_resolve_input_name(n, definition.price_basis) for n in definition.input_names]
+    field_indices = [field_to_idx[f] for f in resolved_inputs]
+    bar_mask = _time_filter_to_bar_mask(definition.params.input_time_filter)
+    bar_indices_selected = np.where(bar_mask)[0]
+    n_outputs = len(definition.output_names)
+    expected_bars = definition.expected_bars if (
+        definition.completeness_policy == CompletenessPolicy.STRICT_FULL_WINDOW
+    ) else None
+
+    # Compile numba function
+    func = compile_formula(definition)
+    n_inputs = len(definition.input_names)
+    func(tuple(np.random.randn(60) for _ in range(n_inputs)))  # warmup
+
+    @ray.remote
+    def _compute_from_refs(symbol_refs, func_code, field_indices_list, bar_indices_list,
+                           expected_bars_val, n_outputs_val):
+        from numba import njit as _njit
+
+        ns = {"np": np, "njit": _njit}
+        exec(func_code, ns)
+        fn = ns["apply_func"]
+        dummy = tuple([np.array([1.0, 2.0, 3.0])] * len(field_indices_list))
+        try:
+            fn(dummy)
+        except Exception:
+            pass
+
+        results = {}
+        for sym, ref in symbol_refs.items():
+            try:
+                arr = ray.get(ref)
+                n_days = arr.shape[0]
+                out = np.full((n_days, n_outputs_val), np.nan, dtype=np.float64)
+                for i in range(n_days):
+                    selected = arr[i, bar_indices_list, :]
+                    first_col = selected[:, field_indices_list[0]]
+                    vc = np.sum(~np.isnan(first_col))
+                    if vc == 0:
+                        continue
+                    if expected_bars_val is not None and vc < expected_bars_val:
+                        continue
+                    inputs = tuple(selected[:, fi] for fi in field_indices_list)
+                    try:
+                        res = fn(inputs)
+                        if res is not None and len(res) >= n_outputs_val:
+                            out[i, :] = res[:n_outputs_val]
+                    except Exception:
+                        pass
+                results[sym] = out
+            except Exception:
+                pass
+        return results
+
+    # Split into batches
+    batch_size = max(1, (len(symbols) + num_workers - 1) // num_workers)
+    t0 = time.time()
+    futures = []
+    for i in range(0, len(symbols), batch_size):
+        batch_syms = symbols[i:i + batch_size]
+        batch_refs = ray.get(store.get_symbol_refs_batch.remote(batch_syms))
+        futures.append(_compute_from_refs.remote(
+            batch_refs, definition.formula, field_indices, bar_indices_selected,
+            expected_bars, n_outputs,
+        ))
+
+    logger.info(f"  Dispatched {len(futures)} workers (preload mode)...")
+    all_vals = {}
+    for i, ref in enumerate(futures):
+        batch_result = ray.get(ref)
+        all_vals.update(batch_result)
+        if (i + 1) % 4 == 0 or i == len(futures) - 1:
+            elapsed = time.time() - t0
+            logger.info(f"  batch {i+1}/{len(futures)}: {len(all_vals)}/{len(symbols)} ({elapsed:.0f}s)")
+
+    logger.info(f"  Preload compute done: {len(all_vals)} stocks in {time.time()-t0:.0f}s")
+
+    # Build per-field dict
+    field_data: Dict[str, Dict[str, pd.Series]] = {}
+    for k, oname in enumerate(definition.output_names):
+        sym_dict = {}
+        for sym, arr_val in all_vals.items():
+            col = arr_val[:, k]
+            valid = ~np.isnan(col)
+            if valid.any():
+                sym_dict[sym] = pd.Series(col, index=date_index, name=oname)
+        if sym_dict:
+            field_data[oname] = sym_dict
+
+    return field_data
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +777,10 @@ def main() -> int:
         logger.info(f"Quick mode: {len(symbols)} random symbols")
 
     # Compute
-    if args.fast:
+    if args.use_preload:
+        logger.info(f"Preload mode (Ray): using preloaded data, {args.num_workers} workers")
+        field_data = compute_fast_preload(definition, num_workers=args.num_workers)
+    elif args.fast:
         if not symbols:
             all_syms = _load_symbols()
             if not all_syms:

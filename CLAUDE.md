@@ -32,7 +32,7 @@
 物理假设 → Numba 实现 → compute_rawdata_local.py → evaluate.py → admission_corr_check.py → 入库审批
 ```
 
-- **本地计算**: `python scripts/compute_rawdata_local.py --formula-file {script.py} --quick -o .claude-output/analysis/`
+- **本地计算**: 见 `docs/COMPUTE.md`（推荐 Ray 加速模式 `--use-preload`，需先 `--preload`）
 - **回测评估**: 见 `docs/BACKTEST.md`（必须用 `gkh-ashare` 环境 python + mock_packages）
 - **相关性检测**: `python scripts/admission_corr_check.py --factors {pkl} --cache .claude-output/pnl_cache/pnl_cache.pkl`
 - **入库流程**: 见 `docs/ASHARE_ADMISSION.md`

@@ -10,6 +10,8 @@
 
 4. **A 股日内因子的 alpha 常集中在空头端** — bipower_var 和 jump_var_ratio 均表现为 |LS Sharpe| 高但 Long Excess 差。做空端（高波动/高跳跃股票）贡献了主要收益，做多端无法跑赢 CSI1000。设计因子时应同时关注 Long Excess，不能只看 LS Sharpe。（Exp#001）
 5. **BPV (bipower variation) 本质是市值因子代理** — Raw Mono=1.0 但 Neutral Mono=0.57，说明 BPV 的排序能力几乎全部来自市值/行业暴露。（Exp#001）
+6. **日内价格时序动态因子系统性失败在 Long Excess** — 3 个方向（smart_money, jump_variation, variance_ratio）共 15 个特征全部 Long Excess 不达标。即使 |LS Sharpe| 达 11.44、|IR| 达 0.61，所有分组绝对收益仍为负。这类因子本质识别「交易行为异常的差股票」，无法选出跑赢 CSI1000 的好股票。后续应转向截面水平/流动性因子或方向性因子。（Exp#001+#002）
+7. **abs_AR(1) 信号 neutral 后增强** — 与 BPV 不同，abs_ar1 的 |LS Sharpe| 从 9.37→11.44（neutral 后增强），说明收益率自相关结构含有独立于市值/行业的信号。但仍无 Long Excess。（Exp#002）
 
 ### ⚠️ 重要注意事项
 
@@ -22,6 +24,7 @@
 |------|------|------|
 | D-001 smart_money (0930-1030) | S=|r|/sqrt(v) 选出噪声bar非知情交易；IR极低(0.04-0.09)，集中度指标(s_ratio) IR=0.28但LS Sharpe仅0.29 | Exp#001 |
 | D-002 jump_variation (0930-1030) | Long Excess 两个方向均不达标(<0.7)；BPV为市值因子代理(neutral后Sharpe从1.0→0.48)；JVR alpha集中在空头端 | Exp#001 |
+| D-003 variance_ratio (0930-1030) | 5特征全部Long Excess深度负值(最佳-1.50)；abs_ar1虽|LS Sharpe|=11.44、|IR|=0.61但所有分组绝对收益为负；因子只能识别差股票不能选出好股票 | Exp#002 |
 
 ## 三、实验记录
 
@@ -54,16 +57,40 @@
 - **报告**: `research/agent_reports/screening/2026-03-24_jump_variation_0930_1030_screening.md`
 - **评估**: `.claude-output/evaluations/smart_money/`, `.claude-output/evaluations/jump_variation/`
 
+### Experiment #002: Variance Ratio（2026-03-25）
+
+**方向**: D-003 variance_ratio
+**Agent**: ashare_rawdata_a
+**结果**: 5 特征测试（4 全量评估），0 通过
+
+| 特征 | |Net Sharpe| (r/n) | |IR| (r/n) | Long Excess (r/n) | w1 Mono (r/n, 翻转) | 状态 |
+|------|---------------------|-------------|---------------------|---------------------|------|
+| `abs_ar1_0930_1030` | 9.37/11.44 | 0.50/0.61 | -2.73/-3.03 | 0.86/0.71 | ❌ LE深度失败 |
+| `vr_2_0930_1030` | 5.27/5.44 | 0.23/0.25 | -1.81/-1.82 | 0.86/0.71 | ❌ LE失败 |
+| `ar1_0930_1030` | 5.18/5.35 | 0.23/0.25 | -1.89/-1.92 | 0.57/0.86 | ❌ LE失败 |
+| `vr_5_0930_1030` | 4.11/4.32 | 0.19/0.20 | -1.52/-1.50 | 0.71/0.43 | ❌ LE+IR边缘 |
+| `vr_ratio_5_2_0930_1030` | - | 0.08/0.09 | - | - | ❌ Quick排除(IR极低) |
+
+**关键发现**:
+1. abs_ar1（|return|自相关）信号极强（|LS Sharpe|=11.44, |IR|=0.61），neutral 后反而增强，非市值代理
+2. 所有 8 个分组的绝对 Sharpe 均为负值，即使最好的分组（翻转后多头端）也跑不过 CSI1000
+3. 连续第 3 个日内微观结构方向失败在 Long Excess 上：这类因子能识别"差股票"但无法选出"好股票"
+4. Quick eval (100 symbols) 的 |IR| 从 0.18 提升到全量的 0.61，再次验证 Quick 不可靠
+
+#### Related
+- **报告**: `research/agent_reports/screening/2026-03-25_variance_ratio_0930_1030_screening.md`
+- **评估**: `.claude-output/evaluations/variance_ratio/`
+
 ## 四、统计
 
 | 指标 | 值 |
 |------|-----|
-| 总实验数 | 1 |
-| 已测特征数 | 10 |
+| 总实验数 | 2 |
+| 已测特征数 | 15 |
 | 已注册 Bundle | 8 (pv_stats×4, volatility×4) |
 | Waiting | 0 |
-| 已排除方向 | 2 (D-001 smart_money 0930-1030, D-002 jump_variation 0930-1030) |
-| 已验证结论 | 5 |
+| 已排除方向 | 3 (D-001 smart_money 0930-1030, D-002 jump_variation 0930-1030, D-003 variance_ratio 0930-1030) |
+| 已验证结论 | 7 |
 
 ## 五、技术备忘
 
