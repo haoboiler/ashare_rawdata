@@ -89,101 +89,41 @@ ls -lt research/agent_reports/feedback/ | head -10
 
 > 详见 `docs/THREE-LAYER-GUIDE.md`。
 
-1. **⭐ 阅读 `research/KNOWLEDGE-BASE.md`**（自动浓缩版，包含已注册 RawData、核心结论、排除方向、方向池、探索线索）
-2. **⭐ 阅读 `docs/ASHARE_ADMISSION.md`**（入库流程、公式要求、Numba 约束）
-3. 阅读方向池中指定的 `prerequisite_reading`（方向专属文档/论文）
-4. **按需阅读** `research/EXPERIMENT-LOG.md` 中的具体实验记录（仅当需要某个历史实验的详细数据时）
+1. **⭐ 阅读 `research/KNOWLEDGE-BASE.md`**（已注册 RawData、结论、排除方向、方向池）
+2. **⭐ 阅读 `docs/BACKTEST.md`**（回测参数）
+3. 阅读方向池中指定的 `prerequisite_reading`（如有）
+4. **按需** 阅读 `research/EXPERIMENT-LOG.md`（历史实验详细数据）
+5. **通过筛选后** 阅读 `docs/ASHARE_ADMISSION.md`（入库流程，研究阶段不需要读）
 
 ### 研究执行
 
-遵循 CLAUDE.md 的全部研究纪律：
-- 假设驱动，每个特征有清晰物理含义
-- 单变量迭代
-- Numba 兼容实现（`@njit`, 纯 numpy, 显式 NaN 处理）
-- 评估（window=1）
-- 连续 2 个失败必须停下反思
+遵循 CLAUDE.md 的全部研究纪律（假设驱动、单变量迭代、连续 2 失败停下反思）。
 
-### 研究工作流：本地计算 → 评估 → 决定入库
+### 研究工作流
 
-> **核心流程**：先本地算因子值导出 pkl，跑回测看效果，再决定是否入库。**不要直接注册入库。**
+> **不要直接注册入库。** 先算 → 评估 → 通过筛选 → 打包 pending。
 
 #### Step A: 编写 Formula 脚本
 
-创建一个注册脚本（参考 `research/basic_rawdata/pv_stats/register_pv_stats_0930_1030.py`），必须包含：
-- `build_definition()` 函数返回 `AShareRawDataDefinition`
-- `@njit` 的 `apply_func(inputs)` formula
-- 正确的 `input_names`, `output_names`, `params.input_time_filter`, `expected_bars`
+参考 `research/basic_rawdata/pv_stats/register_pv_stats_0930_1030.py`，必须含 `build_definition()` 和 `@njit apply_func`。数据字段说明见 `docs/HFT-DATA-GUIDE.md`。
 
-#### Step B: 本地计算因子值（不入库）
+#### Step B: 本地计算
 
 ```bash
 cd /home/gkh/claude_tasks/ashare_rawdata
-
-# 快速验证（100 个随机 symbol，约 1-2 分钟）
-python scripts/compute_rawdata_local.py \
-    --formula-file {your_formula_script.py} \
-    --quick \
-    --output-dir .claude-output/analysis/{direction}/
-
-# 全量计算（5191 symbols，约 30-60 分钟）
-python scripts/compute_rawdata_local.py \
-    --formula-file {your_formula_script.py} \
-    --output-dir .claude-output/analysis/{direction}/
-
-# 只算特定 fields（加速迭代）
-python scripts/compute_rawdata_local.py \
-    --formula-file {your_formula_script.py} \
-    --only-fields smart_money_0930_1030 \
-    --output-dir .claude-output/analysis/{direction}/
+# 快速验证（100 symbol，~2 分钟）
+python scripts/compute_rawdata_local.py --formula-file {script.py} --quick -o .claude-output/analysis/{direction}/
+# 全量（~30-60 分钟）
+python scripts/compute_rawdata_local.py --formula-file {script.py} -o .claude-output/analysis/{direction}/
 ```
 
-`compute_rawdata_local.py` 参数说明：
-- `--formula-file`: 注册脚本路径（含 `build_definition()`）
-- `--quick`: 100 个随机 symbol 快速验证
-- `--only-fields`: 只导出指定 field（加速迭代）
-- `--symbols`: 指定特定 symbol 列表
-- `--start-date`: 限制起始日期（减少数据量）
-- 输出：每个 field 一个 pkl 文件（格式与 `evaluate.py --file` 兼容）
+#### Step C: 回测评估
 
-#### Step C: 跑回测评估
+**必读 `docs/BACKTEST.md`**。使用标准/快速命令模板。注意：必须用 `gkh-ashare` 环境 python + mock_packages。
 
-> **必读**：评估前先阅读 `docs/BACKTEST.md` 获取完整默认参数。
+#### Step D: 迭代
 
-```bash
-cd /home/gkh/claude_tasks/ashare_rawdata
-
-# 标准评估
-python /home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py \
-    --file .claude-output/analysis/{direction}/{feature_name}.pkl \
-    --start 2020-01-01 --window 1 --num-groups 5 \
-    --execution-price-field twap_1300_1400 \
-    --benchmark-index csi1000 \
-    --neutralize \
-    --output-dir .claude-output/evaluations/{direction}/{feature_name}/
-
-# 快速评估（跳过分组和时段分析）
-python /home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py \
-    --file .claude-output/analysis/{direction}/{feature_name}.pkl \
-    --start 2020-01-01 --window 1 --num-groups 5 \
-    --execution-price-field twap_1300_1400 \
-    --benchmark-index csi1000 \
-    --neutralize \
-    --post-process-method csremovemedianbooksize \
-    --quick \
-    --output-dir .claude-output/evaluations/{direction}/{feature_name}/
-```
-
-#### Step D: 根据结果决定下一步
-
-- **结果好** → 全量计算 → 再次评估确认 → 打包 pending（Step 3）
-- **结果一般** → 调整参数/公式 → 重新 Step B
-- **结果差** → 写失败诊断 → 换方向
-
-#### 推荐迭代策略
-
-1. **先 `--quick` 快速验证** — 100 个 symbol 跑完约 1-2 分钟，快速排除明显无效的因子
-2. **通过快速验证后再全量计算** — 5191 个 symbol 约 30-60 分钟
-3. **全量评估通过后才进入打包流程**
+1. 先 `--quick` 快速排除 → 2. 通过后全量计算 → 3. 全量评估通过 → 打包 pending
 
 ## 报告 YAML Frontmatter 规范（强制）
 
@@ -220,26 +160,24 @@ submitted_at: "2026-03-19T05:00:00"
 
 ### 3.1 自动筛选阈值
 
-> **注意**：以下阈值为占位符（TODO），待第一批实验数据确定后更新。
+> 详见 `docs/evaluation-standards.md`
 
 对每个评估完毕的特征，检查是否通过以下**全部**阈值：
 
-| 指标 | 阈值 | 来源 |
-|------|------|------|
-| 数据可用性 | 覆盖至 2024 年后且持续可用 | 3.0 检查结果 |
-| Net Sharpe | ≥ TODO | w1 Net Sharpe |
-| 分组单调性 Mono | ≥ TODO | w1 分组回测单调性评分 |
-| FFR 贡献占比 | < TODO | \|FFR return\| / \|Gross return\| |
+| 指标 | 阈值 | stats.json 字段 |
+|------|------|----------------|
+| 数据覆盖率 | > 30% | 因子 pkl 非 NaN 占比 |
+| LS Sharpe | > 0.9 | `sharpe_abs_net` |
+| IR(LS) | > 0.2 | `ir_ls` |
+| Long Excess Net Sharpe | > 0.7 | `sharpe_long_excess_net` |
+| Mono | > 0.7 | 分组回测单调性评分 |
 
-**在阈值确定前**：研究员应记录所有评估指标，由组长/用户人工判断是否通过。
+**注意**：
+- 取绝对值判断 IC/IR 方向（因子方向可能与预期相反）
+- Mono 需要完整评估（不能用 `--quick`）
+- raw 和 neutralized 两组都要检查，任一组通过即可
 
-### 3.2 流动性诊断（通过 3.1 后执行）
-
-A 股使用成交量/换手率作为流动性代理：
-- 检查因子与 `log(amount)` 的 Spearman 相关性
-- **阈值**: |avg_rho| < 0.50（超过则标记为流动性代理，不进入 pending）
-
-### 3.3 相关性检测（通过 3.2 后执行，参考）
+### 3.2 相关性检测（通过 3.1 后执行，参考）
 
 如果 ashare_alpha 已有因子池，检查新因子与已有因子的相关性。
 相关性检测结果仅供参考，不作为自动筛选的 pass/fail 条件，最终由用户审批时决定。

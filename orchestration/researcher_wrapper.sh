@@ -184,6 +184,13 @@ echo "========================================="
 echo ""
 
 # === 后台监控函数 ===
+# 辅助函数：检查状态文件中 status 是否为 idle（研究完成标志）
+check_status_idle() {
+    local status
+    status=$(grep '^status:' "$STATE_FILE" 2>/dev/null | awk '{print $2}' || echo "unknown")
+    [ "$status" = "idle" ]
+}
+
 monitor_claude_process() {
     local claude_pid=$1
     local log_file=$2
@@ -192,24 +199,21 @@ monitor_claude_process() {
     while kill -0 "$claude_pid" 2>/dev/null; do
         # 检查 STOP 信号
         if [ -f "$STOP_FILE" ]; then
-            local current_mtime
-            current_mtime=$(stat -c %Y "$STATE_FILE" 2>/dev/null || echo "0")
-            if [ "$current_mtime" != "$state_file_mtime_before" ]; then
-                echo "[$(date)] Monitor: STOP + state updated. Killing claude (PID=$claude_pid)..." | tee -a "$log_file"
+            # STOP 信号：如果研究已完成(idle)则立即 kill，否则等待
+            if check_status_idle; then
+                echo "[$(date)] Monitor: STOP + status=idle. Killing claude (PID=$claude_pid)..." | tee -a "$log_file"
                 kill "$claude_pid" 2>/dev/null || true
                 sleep 5
                 kill -9 "$claude_pid" 2>/dev/null || true
                 return 0
             else
-                echo "[$(date)] Monitor: STOP detected, research in progress. Waiting..." | tee -a "$log_file"
+                echo "[$(date)] Monitor: STOP detected, status != idle. Waiting..." | tee -a "$log_file"
             fi
         fi
 
-        # 检查状态文件更新（研究完成）
-        local current_mtime
-        current_mtime=$(stat -c %Y "$STATE_FILE" 2>/dev/null || echo "0")
-        if [ "$current_mtime" != "$state_file_mtime_before" ]; then
-            echo "[$(date)] Monitor: State file updated. Waiting ${POST_COMPLETE_TIMEOUT}s for exit..." | tee -a "$log_file"
+        # 检查 status 是否已变为 idle（研究员完成所有步骤后设置）
+        if check_status_idle; then
+            echo "[$(date)] Monitor: status=idle (research complete). Waiting ${POST_COMPLETE_TIMEOUT}s for graceful exit..." | tee -a "$log_file"
             local waited=0
             while kill -0 "$claude_pid" 2>/dev/null && [ "$waited" -lt "$POST_COMPLETE_TIMEOUT" ]; do
                 sleep 10
