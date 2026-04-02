@@ -4,7 +4,7 @@
 
 ## 数据源
 
-- **Library**: `ashare@stock@kline@1m`
+- **Library**: `ashare@live@stock@kline@1m`
 - **存储**: ArcticDB (S3)，per_symbol 布局
 - **覆盖**: 5191 个 A 股 symbol
 - **时间范围**: 2020-01-02 起
@@ -48,7 +48,7 @@
 实盘 1m 数据可能缺少 1-2 根 bar。`expected_bars` 设为窗口理论 bar 数的 2/3，低于此阈值的交易日跳过。
 
 ### 2. 日线数据与 1m 数据不一致
-近期日期的 `ashare@stock@kline@1d` 的 high/low 可能仅反映上午行情（日线数据更新时序问题）。下午窗口的 twap/vwap 与日线 high/low 对比时可能出现越界。**这不是 1m 数据的问题。**
+近期日期的 `ashare@live@stock@kline@1d` 的 high/low 可能仅反映上午行情（日线数据更新时序问题）。下午窗口的 twap/vwap 与日线 high/low 对比时可能出现越界。**这不是 1m 数据的问题。**
 
 ### 3. 停牌股
 停牌期间无 1m bar 数据。framework 会跳过（NaN）。

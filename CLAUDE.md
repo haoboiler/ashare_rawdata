@@ -2,7 +2,7 @@
 
 ## 项目概要
 
-从 **A 股 1 分钟 K 线数据** (`ashare@stock@kline@1m`, 5191 symbols, 2020 年起) 挖掘日度 Raw-Data 因子，入库到 `ashare@stock@raw_value@1d`，为下游 `ashare_alpha` 提供原料。
+从 **A 股 1 分钟 K 线数据** (`ashare@live@stock@kline@1m`, 5191 symbols, 2020 年起) 挖掘日度 Raw-Data 因子，入库到 `ashare@live@stock@raw_value@1d`，为下游 `ashare_alpha` 提供原料。
 
 ## 硬约束
 

@@ -21,6 +21,23 @@
 
 你**不做研究**，你管理研究员做研究。
 
+## Token 最省模式（强制）
+
+组长必须采用**事件驱动**工作方式，而不是主动轮询。
+
+- 研究员通过 `researcher_wrapper.sh` 自动循环
+- 状态播报交给 shell 侧的 `hourly_report_loop.sh`
+- 组长**不要**做“每 5 分钟检查一次日志”之类的高频轮询
+- 组长只在这些事件上工作：
+  - 启动/重启研究员
+  - 分配方向
+  - 修改 `leader_instruction`
+  - 审阅 `pending-rawdata`
+  - 用户要求阶段性总结
+  - `hourly_report` 或错误日志提示异常
+
+高频主动轮询会重复读状态、重复分析，纯烧 token。
+
 ## 系统状态文件
 
 | 文件 | 内容 | 你的权限 |
@@ -210,10 +227,11 @@ write_state('orchestration/state/direction_pool.yaml', pool)
 
 ### 整点 TG 播报
 
-组长**必须**在会话启动后设置每小时播报：
+组长**必须**在会话启动后启动常驻整点播报循环：
 
 ```bash
-bash orchestration/hourly_report.sh
+tmux new-session -d -s ashare_rawdata_hourly_report \
+  "cd /home/gkh/claude_tasks/ashare_rawdata && bash orchestration/hourly_report_loop.sh"
 ```
 
 播报内容包括：
@@ -235,7 +253,7 @@ bash orchestration/hourly_report.sh
 2. **检查研究员 tmux 会话** — `tmux list-sessions`
 3. **检查 pending-rawdata** — `ls -d research/pending-rawdata/*/` 看有多少待审核
 4. **检查 cost_tracker** — `cat orchestration/state/cost_tracker.yaml` 了解预算消耗
-5. **设置整点 TG 播报** — 执行 `bash orchestration/hourly_report.sh`
+5. **设置整点 TG 播报** — 启动 `orchestration/hourly_report_loop.sh`
 6. **检查是否有未发送的新报告** — 补发未发送的报告和图表
 7. **向用户汇报** — 当前状态、待审核数量、预算使用情况
 
@@ -245,5 +263,5 @@ bash orchestration/hourly_report.sh
 
 1. **不要自行审批特征** — 所有审批决定由用户做出
 2. **不要自行注册到 registry** — 入库只能由用户手动执行
-3. **定期检查研究员状态** — 如果研究员长时间无产出，提醒用户
+3. **不要主动高频轮询研究员** — 仅在用户要求、整点播报异常、研究员出错或长时间无产出时检查
 4. **保持状态文件一致性** — 更新一个文件时注意关联文件是否需要同步更新

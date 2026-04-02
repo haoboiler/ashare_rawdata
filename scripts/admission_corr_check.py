@@ -10,7 +10,7 @@ A 股 Raw-Data 入库相关性检验脚本
 
 依赖：
   - PnL 缓存文件（由 build_pnl_cache.py 构建）
-  - evaluate.py（对候选因子跑回测）
+  - evaluate_rawdata.py（对候选因子跑回测）
 
 用法:
     # 检验单个因子
@@ -51,7 +51,7 @@ import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path("/home/gkh/claude_tasks/ashare_rawdata")
-EVALUATE_PY = "/home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py"
+EVALUATE_WRAPPER = str(PROJECT_ROOT / "scripts" / "evaluate_rawdata.py")
 PYTHON = "/home/b0qi/anaconda3/envs/gkh-ashare/bin/python"
 MOCK_PACKAGES = str(PROJECT_ROOT / ".claude-tmp" / "mock_packages")
 
@@ -69,7 +69,7 @@ def load_cache(cache_path: str) -> dict:
 
 
 def run_evaluate_for_factor(factor_path: str, start: str, end: str) -> dict:
-    """对候选因子跑 evaluate.py，提取 PnL 序列"""
+    """对候选因子跑项目 raw-data wrapper，提取 PnL 序列"""
     name = Path(factor_path).stem
     eval_dir = PROJECT_ROOT / ".claude-tmp" / "corr_check_evals" / name
 
@@ -77,22 +77,16 @@ def run_evaluate_for_factor(factor_path: str, start: str, end: str) -> dict:
     env["PYTHONPATH"] = f"{MOCK_PACKAGES}:{env.get('PYTHONPATH', '')}"
 
     cmd = [
-        PYTHON, EVALUATE_PY,
+        PYTHON, EVALUATE_WRAPPER,
         "--file", str(factor_path),
         "--start", start,
         "--end", end,
-        "--mode", "long_short",
-        "--num-groups", "8",
-        "--post-process-method", "comp",
-        "--execution-price-field", "twap_1300_1400",
-        "--benchmark-index", "csi1000",
-        "--commission-rate", "0.0001",
-        "--stamp-tax-rate", "0.0",
+        "--no-neutralize",
         "--quick",
         "--output-dir", str(eval_dir),
     ]
 
-    print(f"  Running evaluate.py...")
+    print(f"  Running evaluate_rawdata.py...")
     t0 = time.time()
     result = subprocess.run(
         cmd, capture_output=True, text=True, env=env,

@@ -8,7 +8,7 @@
 
 ### 1.1 1m K线数据（主要输入）
 
-- **Library**: `ashare@stock@kline@1m`
+- **Library**: `ashare@live@stock@kline@1m`
 - **覆盖范围**: 5191 个 symbol，2020-01-02 起
 - **每日 bar 数**: 240 根（09:30-11:30 120 根, 13:00-15:00 120 根）
 
@@ -29,7 +29,7 @@
 
 ### 1.2 日线数据（辅助参考）
 
-- **Library**: `ashare@stock@kline@1d`
+- **Library**: `ashare@live@stock@kline@1d`
 - **字段**: 与 1m 相同的 OHLCVA + origin 系列
 - **已知问题**: 近期日期的日线 high/low 可能仅反映上午数据（日线数据源更新时序问题），导致下午窗口的 twap/vwap 验证时出现越界。非计算错误。
 - **框架限制**: `AShareRawDataDefinition` 仅支持 1m 输入，日线数据无法直接在 formula 中引用

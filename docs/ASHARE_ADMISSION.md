@@ -6,8 +6,8 @@
 
 - 定义存在 registry，而不是硬编码在老的聚合脚本里
 - 公式以 `formula string + numba` 形式注册
-- 底层输入仍然来自 `ashare@stock@kline@1m`
-- 正式输出统一写入 `ashare@stock@raw_value@1d`
+- 底层输入仍然来自 `ashare@live@stock@kline@1m`
+- 正式输出统一写入 `ashare@live@stock@raw_value@1d`
 - 更新器采用 `symbol chunk -> staging -> canonical publish`
 
 典型例子：
@@ -21,28 +21,28 @@
 ### 1.1 输入、定义、输出分别在哪里
 
 - canonical source raw:
-  - `ashare@stock@kline@1m`
+  - `ashare@live@stock@kline@1m`
 - generated rawdata registry:
   - `ashare_hf_variable` 包
   - 当前默认 registry backend 可以是 JSON fallback，也可以是 Mongo
 - canonical generated rawdata:
-  - `ashare@stock@raw_value@1d`
+  - `ashare@live@stock@raw_value@1d`
 - staging library:
-  - `ashare@stock@raw_value_staging@1d`
+  - `ashare@live@stock@raw_value_staging@1d`
 
 ### 1.2 物理形状
 
-- `ashare@stock@kline@1m` 是 `per-symbol`
+- `ashare@live@stock@kline@1m` 是 `per-symbol`
   - `symbol = 股票代码`
   - `columns = open/high/low/close/volume/...`
-- `ashare@stock@raw_value@1d` 是 `per-field`
+- `ashare@live@stock@raw_value@1d` 是 `per-field`
   - `symbol = 字段名`
   - `columns = 股票代码`
   - `index = trade date`
 
 ### 1.3 读路径
 
-`casimir_ashare` 现在会优先把 `ashare@stock@raw_value@1d` 当作 daily raw source，所以：
+`casimir_ashare` 现在会优先把 `ashare@live@stock@raw_value@1d` 当作 daily raw source，所以：
 
 - 试验字段建议先加 `_v1`
 - 不要一开始就覆盖 legacy 同名字段
@@ -424,7 +424,7 @@ Python 必须使用：
 
 1. 按 symbol chunk 并行计算
 2. 每个 chunk 先写 `staging library`
-3. 所有 chunk 成功后，才 publish 到 `ashare@stock@raw_value@1d`
+3. 所有 chunk 成功后，才 publish 到 `ashare@live@stock@raw_value@1d`
 
 ### 7.2 为什么这么设计
 
@@ -464,7 +464,7 @@ Python 必须使用：
 import arcticdb
 
 ac = arcticdb.Arctic("s3://192.168.2.180:arctic?access=bookdisco&secret=bookdiscono1&port=8122")
-lib = ac.get_library("ashare@stock@raw_value@1d", create_if_missing=False)
+lib = ac.get_library("ashare@live@stock@raw_value@1d", create_if_missing=False)
 print("twap_0930_1030_v1" in lib.list_symbols())
 ```
 

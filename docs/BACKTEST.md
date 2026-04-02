@@ -21,15 +21,16 @@
 
 ## Python 环境
 
-因为 `compute_rawdata_local.py` 用 `gkh-ashare` 环境（numpy 2.x）生成 pkl，evaluate.py 也必须用同一环境读取：
+因为 `compute_rawdata_local.py` 用 `gkh-ashare` 环境（numpy 2.x）生成 pkl，而共享 `evaluate.py` 也必须用同一环境读取，所以本项目统一通过 wrapper 调用：
 
 ```bash
-PYTHONPATH=".claude-tmp/mock_packages:$PYTHONPATH" \
-/home/b0qi/anaconda3/envs/gkh-ashare/bin/python \
-    /home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py ...
+python scripts/evaluate_rawdata.py ...
 ```
 
-注意：需要 `.claude-tmp/mock_packages/` 中的 `bookdisco_ml` mock 包。
+wrapper 会自动：
+- 使用正确的 `gkh-ashare` python 调起共享 `evaluate.py`
+- 注入 `.claude-tmp/mock_packages/`
+- 从 `*.meta.json` sidecar 或 registry 补 raw-data timing metadata，并对齐 `t_plus_n`
 
 ## 股票池
 
@@ -43,17 +44,9 @@ PYTHONPATH=".claude-tmp/mock_packages:$PYTHONPATH" \
 ```bash
 # ⭐ RawData 标准评估命令（从项目根目录运行）
 cd /home/gkh/claude_tasks/ashare_rawdata
-PYTHONPATH=".claude-tmp/mock_packages:$PYTHONPATH" \
-/home/b0qi/anaconda3/envs/gkh-ashare/bin/python \
-    /home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py \
+python scripts/evaluate_rawdata.py \
     --file .claude-output/analysis/{feature_name}.pkl \
     --start 2020-01-01 --end 2024-12-31 \
-    --mode long_short \
-    --num-groups 8 \
-    --post-process-method comp \
-    --execution-price-field twap_1300_1400 \
-    --benchmark-index csi1000 \
-    --commission-rate 0.0001 \
     --neutralize \
     --output-dir .claude-output/evaluations/{direction}/{feature_name}/
 ```
@@ -64,16 +57,9 @@ PYTHONPATH=".claude-tmp/mock_packages:$PYTHONPATH" \
 # 快速模式（跳过分组和时段分析，用于快速迭代）
 # 注意：--quick 跳过 Mono 评分，最终提交前必须跑完整评估
 cd /home/gkh/claude_tasks/ashare_rawdata
-PYTHONPATH=".claude-tmp/mock_packages:$PYTHONPATH" \
-/home/b0qi/anaconda3/envs/gkh-ashare/bin/python \
-    /home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py \
+python scripts/evaluate_rawdata.py \
     --file .claude-output/analysis/{feature_name}.pkl \
     --start 2020-01-01 --end 2024-12-31 \
-    --mode long_short \
-    --num-groups 8 \
-    --post-process-method comp \
-    --execution-price-field twap_1300_1400 \
-    --benchmark-index csi1000 \
     --neutralize \
     --quick \
     --output-dir .claude-output/evaluations/{direction}/{feature_name}/
@@ -92,7 +78,8 @@ PYTHONPATH=".claude-tmp/mock_packages:$PYTHONPATH" \
 
 1. **必须从项目根目录运行**（确保 `.env` 生效）
 2. **不要修改 evaluate.py**（共享文件，修改需与 ashare_alpha 协调）
-3. 因子值 pickle 格式：`index=trade_date(DatetimeIndex, tz=Asia/Shanghai)`, `columns=symbols(str)`, `values=factor_value(float64)`
-4. `--neutralize` 会同时输出 raw 和 neutralized 两组结果，方便对比
-5. `--end` 固定为 `2024-12-31`，RawData 不需要回测到最新日期
-6. 最后的 `update_output_index` 报错（跨项目路径）可忽略，不影响结果
+3. `compute_rawdata_local.py` 导出的每个 `pkl` 旁边会有一个 `*.meta.json`，wrapper 会优先读取它来推断 raw-data 的 `t_plus_n`
+4. 因子值 pickle 格式：`index=trade_date(DatetimeIndex, tz=Asia/Shanghai)`, `columns=symbols(str)`, `values=factor_value(float64)`
+5. `--neutralize` 会同时输出 raw 和 neutralized 两组结果，方便对比
+6. `--end` 固定为 `2024-12-31`，RawData 不需要回测到最新日期
+7. 最后的 `update_output_index` 报错（跨项目路径）可忽略，不影响结果

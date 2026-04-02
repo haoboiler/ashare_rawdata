@@ -40,7 +40,7 @@ def read_rawdata(field: str, conn: Arctic = None) -> pd.DataFrame:
 def read_daily_kline_column(col: str, symbols: List[str], conn: Arctic = None) -> pd.DataFrame:
     """读取日线某列 (high/low/close)，返回 日期 x 股票 DataFrame"""
     conn = conn or get_conn()
-    lib = conn.get_library("ashare@stock@kline@1d", create_if_missing=False)
+    lib = conn.get_library("ashare@live@stock@kline@1d", create_if_missing=False)
     data = {}
     for i, sym in enumerate(symbols):
         try:

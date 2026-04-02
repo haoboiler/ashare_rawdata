@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """构建已入库 raw-data 的 PnL 缓存。
 
-对 ashare@stock@raw_value@1d 中的所有 field 跑 evaluate.py 回测，
+对 ashare@live@stock@raw_value@1d 中的所有 field 跑项目 raw-data wrapper 回测，
 提取日度 PnL 序列（LS absolute + Long-benchmark excess），存为缓存 pkl。
 
 用法:
@@ -44,9 +44,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-EVALUATE_PY = "/home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py"
-PYTHON = "/home/b0qi/anaconda3/envs/gkh-ashare/bin/python"
 PROJECT_ROOT = Path("/home/gkh/claude_tasks/ashare_rawdata")
+EVALUATE_WRAPPER = str(PROJECT_ROOT / "scripts" / "evaluate_rawdata.py")
+PYTHON = "/home/b0qi/anaconda3/envs/gkh-ashare/bin/python"
 MOCK_PACKAGES = str(PROJECT_ROOT / ".claude-tmp" / "mock_packages")
 
 
@@ -75,7 +75,7 @@ def export_field_to_pkl(field: str, output_dir: Path) -> Path:
 
 
 def run_evaluate(pkl_path: Path, output_dir: Path, start: str, end: str) -> Path:
-    """运行 evaluate.py 并返回结果目录"""
+    """运行项目 raw-data wrapper 并返回结果目录"""
     field_name = pkl_path.stem
     eval_dir = output_dir / field_name
 
@@ -83,17 +83,11 @@ def run_evaluate(pkl_path: Path, output_dir: Path, start: str, end: str) -> Path
     env["PYTHONPATH"] = f"{MOCK_PACKAGES}:{env.get('PYTHONPATH', '')}"
 
     cmd = [
-        PYTHON, EVALUATE_PY,
+        PYTHON, EVALUATE_WRAPPER,
         "--file", str(pkl_path),
         "--start", start,
         "--end", end,
-        "--mode", "long_short",
-        "--num-groups", "8",
-        "--post-process-method", "comp",
-        "--execution-price-field", "twap_1300_1400",
-        "--benchmark-index", "csi1000",
-        "--commission-rate", "0.0001",
-        "--stamp-tax-rate", "0.0",
+        "--no-neutralize",
         "--quick",
         "--output-dir", str(eval_dir),
     ]
@@ -110,7 +104,7 @@ def run_evaluate(pkl_path: Path, output_dir: Path, start: str, end: str) -> Path
         elif "update_output_index" in result.stdout:
             pass
         else:
-            raise RuntimeError(f"evaluate.py failed for {field_name}:\n{result.stderr[-500:]}")
+            raise RuntimeError(f"evaluate_rawdata.py failed for {field_name}:\n{result.stderr[-500:]}")
 
     return eval_dir
 

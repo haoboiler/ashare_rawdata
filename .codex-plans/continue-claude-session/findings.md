@@ -1,0 +1,151 @@
+# Findings
+
+- Global and project FOCUS files are empty.
+- Project constraints are defined in `CLAUDE.md`; local outputs should prefer `.claude-output/` and temporary files `.claude-tmp/`.
+- Relevant Claude project session directory is `~/.claude/projects/-home-gkh-claude-tasks-ashare-rawdata/`.
+- User's quoted question appears in session `50b7b016-336a-4bb7-a149-6950620e7af5.jsonl`.
+- The earlier prompt that introduced the colleague code is: `https://github.com/bookdisco/Casimir/tree/evolve/ashare-hf-var/scripts/evolve_ashare ... 据他所说可以缩短计算时间5倍以上`.
+- Claude already verified in that session that direct Ray-parallel reads from ArcticDB/S3 did not accelerate; the real speedup came from preload-to-memory.
+- The colleague branch exists locally as `/home/gkh/ashare/casimir_ashare` remote branch `origin/evolve/ashare-hf-var`.
+- `scripts/evolve_ashare/evolve_actor.py` stores per-symbol 3D numpy arrays in Ray object store, prebuilds a backtest context, supports multi-output evaluation, and caches HF and daily fields.
+- `scripts/evolve_ashare/fast_update.py` is fast mainly when data is already resident or IO is cheap; its README claim combines a one-time load cost with extremely fast compute.
+- Current project `scripts/compute_rawdata_local.py` now borrows the preload-actor pattern, but still reconstructs per-symbol 3D arrays inside each compute worker and still exports pickle for downstream `evaluate.py`, so it does not yet match the full evolution framework loop speed.
+- Implemented follow-up: current project preload actor now stores per-symbol 3D ndarray `ObjectRef`s plus metadata, and `--use-preload` workers consume refs directly instead of fetching DataFrames from the actor.
+- Static verification completed with `python3 -m py_compile scripts/compute_rawdata_local.py`.
+- Benchmark script created at `.claude-tmp/benchmarks/benchmark_preload_refactor.py` and report saved to `.claude-output/reports/preload_refactor_benchmark_2026-03-25.json`.
+- Representative benchmark (`variance_ratio_0930_1030`, 2024-01-01~2024-12-31, 118 loaded symbols, 8 workers) showed:
+  - old preload-compute path: 8.151s
+  - new preload-compute path: 1.512s
+  - compute-phase speedup: 5.39x
+  - old vs new outputs: exact match, max diff 0.0 on all five outputs
+  - serial vs new outputs: exact match, max diff 0.0 on all five outputs
+- First-run total wall time became slower in the benchmark because 3D array construction moved into preload:
+  - old first run (load df + old compute): 10.411s
+  - new first run (load df + build refs + new compute): 38.305s
+  - implication: this refactor optimizes repeated compute after preload, not the cold start
+- On this benchmark, break-even versus old DataFrame-preload design is roughly 6 repeated computes on the same preloaded data.
+- Point #2 is now implemented in `scripts/compute_rawdata_local.py` as an in-memory quick-eval hot path:
+  - `--quick-eval` runs Tier 1 backtest stats immediately after compute
+  - `--skip-export` avoids writing pkl files for exploratory runs
+  - quick-eval reuses helper functions imported from `/home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py`
+- Because raw-data definitions store numba code rather than casimir formula strings, t-plus-n inference for quick-eval must stay local and use `definition.data_available_at` plus execution-field timing; evaluate.py's formula parser cannot be reused directly for this piece.
+- Local quick-eval validation succeeded with:
+  - command: `python3 scripts/compute_rawdata_local.py --formula-file research/basic_rawdata/variance_ratio/register_variance_ratio_0930_1030.py --quick --quick-eval --skip-export --only-fields vr_2_0930_1030 --start-date 2024-01-01 --eval-start 2024-01-01 --eval-end 2024-12-31`
+  - report: `.claude-output/reports/quick_eval/variance_ratio_0930_1030_20260325-011436.json`
+  - reported metrics: coverage 98.0%, `sharpe_abs_net=-0.81395`, `sharpe_long_excess_net=-1.06121`, `ir_ls=-0.0116`
+- `docs/COMPUTE.md` now documents the quick-eval workflow and report location.
+- The detached preload actor has been recreated with the new quick-eval methods, but full `--use-preload + --quick-eval` validation is still pending because the 2024-only full-market preload load had not completed within the session time budget.
+- `scripts/utils/rawdata_eval.py` now centralizes:
+  - sidecar metadata path/format
+  - registry fallback lookup by output field
+  - raw-data `t_plus_n` inference from `data_available_at` and execution-field timing
+  - shared evaluate subprocess environment + harmless error detection
+- `scripts/evaluate_rawdata.py` now wraps shared `ashare_alpha/backtest/evaluate.py`, uses project defaults, and passes explicit `--t-plus-n` when sidecar or registry metadata is available.
+- `scripts/compute_rawdata_local.py` export now writes `{field}.meta.json` next to each `{field}.pkl`.
+- Validation results for the new wrapper:
+  - sidecar path:
+    - compute command produced `.claude-output/analysis/wrapper_sidecar_quick/vr_2_0930_1030.pkl`
+    - sidecar `.claude-output/analysis/wrapper_sidecar_quick/vr_2_0930_1030.meta.json` contains `data_available_at=1031`
+    - wrapper run reported `t_plus_n=0`, `metadata=sidecar`
+    - stats matched the earlier in-memory quick-eval sample: `sharpe_abs_net=-0.81395`, `sharpe_long_excess_net=-1.06121`
+  - registry fallback path:
+    - exported `.claude-output/analysis/registry_fallback_smoke/twap_0930_1030.pkl` without sidecar
+    - wrapper run reported `t_plus_n=0`, `metadata=registry`
+    - confirms wrapper can align timing for already-registered raw-data fields too
+- `scripts/build_pnl_cache.py` and `scripts/admission_corr_check.py` now call `scripts/evaluate_rawdata.py` instead of shared `evaluate.py` directly, while explicitly preserving their previous raw-only behavior via `--no-neutralize`.
+- `docs/BACKTEST.md`, `docs/COMPUTE.md`, and `prompt/startup.md` now point users/agents to the wrapper entrypoint instead of direct `evaluate.py --file`.
+- New `scripts/evolve_rawdata.py` provides a thin exploration driver on top of existing raw-data compute + quick-eval:
+  - fixed-batch mode via repeated `--formula-file` / `--bundle`
+  - generator mode via `--generator-file` + seed definition
+  - per-generation leaderboard + per-field score tables under `.claude-output/evolve/...`
+- The driver ranks candidates by a configurable quick-eval metric, defaulting to `abs(sharpe_abs_net)`, and keeps top-K survivors per generation.
+- The driver deliberately does not introduce a second evaluation stack; shortlist export and formal evaluation still belong to `compute_rawdata_local.py` and `evaluate_rawdata.py`.
+- Smoke validation results:
+  - fixed-candidate batch: `.claude-output/evolve/smoke_explicit`
+    - ranked `jump_variation_0930_1030` first on 20 sampled symbols over 2024 with fitness `3.5334`
+  - generator mode: `.claude-output/evolve/smoke_generator`
+    - validated candidate generation, generation leaderboard writing, and survivor selection on a 2-candidate clone generator
+# Preload Stability Findings
+
+- Current researcher behavior is no longer the main problem. After intervention, both researchers are running `compute_rawdata_local.py --quick-eval --skip-export` with `--eval-start 2023-01-01 --eval-end 2024-12-31`, i.e. full-market 2-year fallback without `--quick`.
+- `ashare_rawdata_a` still cannot use preload reliably. The log shows the preload actor begins loading `[2020-01-01 ~ 2024-12-31]` and then receives `SIGTERM` during actor-side data loading.
+- The failing path is not caused by the wrapper monitor any more. The researcher tmux session remains alive while the preload actor dies inside the compute command.
+- `ashare_rawdata_b` attempted to restart local Ray (`ray stop --force` / `ray start`) as a workaround before intervention. This is now explicitly forbidden in both `researcher.md` and `leader_instruction`.
+- Immediate debugging target: inspect `scripts/compute_rawdata_local.py` preload actor lifecycle, actor naming/reuse, and whether researcher-side command patterns leave stale/broken actors that later receive termination signals.
+- Root cause is likely the old rebuild strategy itself: unconditional `ray.kill(old_actor)` followed by immediate rebuild can overlap old object-store memory cleanup with new preload allocation, which is risky on the shared 50GB object store.
+- Patched behavior:
+  - preload actor now exposes `get_preload_info()` with `status/start/end/error`
+  - healthy same-range actor is reused instead of rebuilt
+  - same-range actor already loading causes later `--preload` calls to wait instead of kill/rebuild
+  - unresponsive actor now fails safe by default with a clear error
+  - explicit `--force-preload-rebuild` kills the bad actor, waits a grace period, then starts a fresh actor
+- Validation after patch:
+  - `python scripts/compute_rawdata_local.py --preload --start-date 2020-01-01` now errors fast with a clear message when the old actor is unresponsive
+  - `python scripts/compute_rawdata_local.py --preload --start-date 2020-01-01 --force-preload-rebuild` enters a controlled rebuild and creates a new actor that remains observable in `status=loading`
+  - a second `--preload` during loading logs “waiting for readiness” instead of starting another rebuild
+  - `--use-preload` now fails fast with “Preload actor is still loading data” instead of hanging
+- A new soft-isolated managed preload Ray service was added:
+  - address `127.0.0.1:27680`
+  - dedicated temp dir / metadata / address-file wiring under project `.claude-tmp/` and cache paths
+  - researchers no longer need to hardcode `RAY_ADDRESS`; `--use-preload` reads the managed address file
+- Managed screening preload on the isolated Ray completed successfully:
+  - window `2022-01-01 ~ 2024-12-31`
+  - `basic6` fields
+  - `5090/5191` symbols loaded
+  - `42.51 GB`
+  - `363s`
+- Dedicated-user preload isolation prep is now in place:
+  - `scripts/utils/preload_ray.py` supports env overrides for host/port/runtime/address/metadata/log/state paths
+  - `scripts/compute_rawdata_local.py` supports `ASHARE_RAWDATA_PRELOAD_STATE_PATH` so preload build state can live outside the project tree
+  - new wrappers exist for a `gkh_ray`-owned preload stack:
+    - `orchestration/preload_ray_gkh_ray.env.sh`
+    - `orchestration/start_rawdata_preload_ray_gkh_ray.sh`
+    - `orchestration/stop_rawdata_preload_ray_gkh_ray.sh`
+    - `orchestration/status_rawdata_preload_ray_gkh_ray.sh`
+    - `orchestration/build_rawdata_preload_gkh_ray.sh`
+    - `orchestration/provision_gkh_ray_user.sh`
+    - `orchestration/grant_gkh_ray_preload_access.sh`
+- Planned dedicated-user port set:
+  - head `127.0.0.1:43680`
+  - worker range `43700-44699`
+  - side ports `43690-43697`
+  - all checked free before provisioning
+- Current blocker to actually create `gkh_ray` is interactive sudo:
+  - `sudo -n true` fails with password requirement in this session
+  - `sudo ./orchestration/provision_gkh_ray_user.sh` prompts for password, so user creation cannot be completed non-interactively from this agent
+- Another important permission finding:
+  - `/home/gkh` is currently `drwxr-x---`
+  - even after `gkh_ray` is created, it cannot reach `/home/gkh/claude_tasks/ashare_rawdata` or `/home/gkh/ashare` until ACL is granted
+  - `orchestration/grant_gkh_ray_preload_access.sh` handles the needed `setfacl` step once the user exists
+- Leader-driven researchers successfully used the managed preload for first-round evolve runs:
+  - `corwin_schultz_spread/register_cs_spread_full.py`
+    - fitness `4.862662990847039`
+    - total `168.872s`
+    - compute `7.046s`
+    - eval `161.826s`
+  - `volume_entropy/register_volume_microstructure_full.py`
+    - fitness `6.124930627227521`
+    - total `166.6s`
+    - compute `8.679s`
+    - eval `157.921s`
+- Real-world hot-start throughput now improved drastically versus the earlier serial full-market path:
+  - A total wall time improvement roughly `24.95x`
+  - B total wall time improvement roughly `29x`
+  - compute-only speedup is `550x+`
+  - cold start including preload build is still about `7.9x` better than the earlier serial baseline
+- The second preload-backed researcher runs then failed on the same actor-unavailable error:
+  - `.claude-output/evolve/20260325-214151/.../candidate_results.json`
+  - `.claude-output/evolve/20260325-214200/.../candidate_results.json`
+  - both recorded `Socket closed` from actor `86ec5e7ede35e1afd501e26702000000`
+- By the time of follow-up monitoring, `bash orchestration/status_rawdata_preload_ray.sh` returned:
+  - `tmux_session=missing`
+  - `ray_status=down`
+  so this was no longer just a false-positive liveness heuristic; the managed preload cluster itself had gone down
+- Researcher behavior after the managed preload failure is policy-compliant:
+  - no `--quick`
+  - no `--symbols`
+  - no `ray stop/start`
+  - both researchers fall back to full-market non-preload compute / quick-eval paths
+- Orchestration still has stale state-file writeback:
+  - A/B remain `status: assigned` in YAML while live logs clearly show they are mid-cycle
+  - this is a separate orchestration hygiene issue from the Ray failure itself

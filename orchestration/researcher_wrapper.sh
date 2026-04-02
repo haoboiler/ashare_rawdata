@@ -33,6 +33,8 @@ PROMPT_FILE="${PROJECT_DIR}/orchestration/prompts/researcher.md"
 TG_SEND="${PROJECT_DIR}/orchestration/tg_send.py"
 TG_CONFIG="${PROJECT_DIR}/orchestration/config.yaml"
 COST_TRACKER="${PROJECT_DIR}/orchestration/state/cost_tracker.yaml"
+SENT_REPORTS="${PROJECT_DIR}/orchestration/state/.last_sent_reports"
+RUNTIME_ENV_FILE="${PROJECT_DIR}/orchestration/researcher_runtime_env.sh"
 
 # 从 config.yaml 读取配置
 CONFIG_FILE="${PROJECT_DIR}/orchestration/config.yaml"
@@ -49,6 +51,11 @@ export OMP_NUM_THREADS="$RAY_CPU_LIMIT"
 export MKL_NUM_THREADS="$RAY_CPU_LIMIT"
 export NUMBA_NUM_THREADS="$RAY_CPU_LIMIT"
 export PYTHON_CPU_COUNT="$RAY_CPU_LIMIT"
+
+if [ -f "$RUNTIME_ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$RUNTIME_ENV_FILE"
+fi
 
 case "$AGENT_ID" in
     ashare_rawdata_a) CPU_RANGE="0-$((RAY_CPU_LIMIT - 1))" ;;
@@ -184,35 +191,177 @@ echo "========================================="
 echo ""
 
 # === 后台监控函数 ===
-# 辅助函数：检查状态文件中 status 是否为 idle（研究完成标志）
-check_status_idle() {
-    local status
-    status=$(grep '^status:' "$STATE_FILE" 2>/dev/null | awk '{print $2}' || echo "unknown")
-    [ "$status" = "idle" ]
+# 辅助函数：读取状态文件中的 status
+get_state_status() {
+    grep '^status:' "$STATE_FILE" 2>/dev/null | awk '{print $2}' || echo "unknown"
+}
+
+# 辅助函数：读取状态文件 mtime（纳秒）
+get_state_mtime_ns() {
+    python3 - "$STATE_FILE" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    print(os.stat(path).st_mtime_ns)
+except FileNotFoundError:
+    print(0)
+PY
+}
+
+mark_assigned_in_progress() {
+    python3 - "$STATE_FILE" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+sys.path.insert(0, '.')
+from scripts.utils.state_manager import update_state
+
+state_path = Path(sys.argv[1])
+if not state_path.exists():
+    raise SystemExit(0)
+
+data = yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
+if data.get("status") != "assigned":
+    raise SystemExit(0)
+
+update_state(str(state_path), {"status": "in_progress"})
+print("in_progress")
+PY
+}
+
+get_latest_report_path() {
+    python3 - "$STATE_FILE" "$PROJECT_DIR" "$AGENT_ID" <<'PY'
+import sys
+import time
+from pathlib import Path
+
+import yaml
+
+state_path = Path(sys.argv[1])
+project_dir = Path(sys.argv[2])
+agent_id = sys.argv[3]
+
+report_path = ""
+try:
+    if state_path.exists():
+        state = yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
+        report_path = ((state.get("last_checkpoint") or {}).get("report_path") or "").strip()
+except Exception:
+    report_path = ""
+
+if report_path:
+    print(report_path)
+    raise SystemExit(0)
+
+screening_dir = project_dir / "research" / "agent_reports" / "screening"
+if not screening_dir.exists():
+    print("")
+    raise SystemExit(0)
+
+now = time.time()
+for path in sorted(screening_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
+    if now - path.stat().st_mtime > 7200:
+        break
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()[:20]
+    except Exception:
+        continue
+    for line in lines:
+        normalized = line.strip().replace("'", '"')
+        if normalized == f'agent_id: "{agent_id}"' or normalized == f"agent_id: {agent_id}":
+            print(str(path.relative_to(project_dir)))
+            raise SystemExit(0)
+
+print("")
+PY
+}
+
+maybe_send_report_fallback() {
+    local log_file=$1
+    local current_status report_rel report_path report_basename send_output send_rc
+
+    current_status=$(get_state_status)
+    if [ "$current_status" != "idle" ]; then
+        return 0
+    fi
+
+    report_rel=$(get_latest_report_path)
+    if [ -z "$report_rel" ]; then
+        return 0
+    fi
+
+    if [[ "$report_rel" = /* ]]; then
+        report_path="$report_rel"
+    else
+        report_path="${PROJECT_DIR}/${report_rel}"
+    fi
+
+    if [ ! -f "$report_path" ]; then
+        echo "[$(date)] Shell fallback: report not found, skip TG send: ${report_path}" | tee -a "$log_file"
+        return 0
+    fi
+
+    report_basename=$(basename "$report_path")
+    touch "$SENT_REPORTS"
+    if grep -qF "$report_basename" "$SENT_REPORTS" 2>/dev/null; then
+        return 0
+    fi
+
+    echo "[$(date)] Shell fallback: sending unsent report ${report_basename}..." | tee -a "$log_file"
+    send_output=$(python "$TG_SEND" --file "$report_path" 2>&1)
+    send_rc=$?
+    printf '%s\n' "$send_output" | tee -a "$log_file"
+
+    if [ "$send_rc" -eq 0 ]; then
+        echo "$report_basename" >> "$SENT_REPORTS"
+        echo "[$(date)] Shell fallback: marked report as sent (${report_basename})." | tee -a "$log_file"
+    else
+        echo "[$(date)] Shell fallback: TG send failed for ${report_basename} (rc=${send_rc})." | tee -a "$log_file"
+    fi
 }
 
 monitor_claude_process() {
     local claude_pid=$1
     local log_file=$2
     local state_file_mtime_before=$3
+    local saw_post_launch_update=0
+    local saw_non_idle=0
 
     while kill -0 "$claude_pid" 2>/dev/null; do
+        local current_status
+        local current_mtime_ns
+        current_status=$(get_state_status)
+        current_mtime_ns=$(get_state_mtime_ns)
+
+        if [ "$current_mtime_ns" != "$state_file_mtime_before" ] && [ "$saw_post_launch_update" -eq 0 ]; then
+            saw_post_launch_update=1
+            echo "[$(date)] Monitor: state file updated after launch (status=${current_status})." | tee -a "$log_file"
+        fi
+
+        if [ "$current_status" != "idle" ] && [ "$current_status" != "unknown" ] && [ "$current_status" != "null" ]; then
+            saw_non_idle=1
+        fi
+
         # 检查 STOP 信号
         if [ -f "$STOP_FILE" ]; then
             # STOP 信号：如果研究已完成(idle)则立即 kill，否则等待
-            if check_status_idle; then
+            if [ "$current_status" = "idle" ] && [ "$saw_non_idle" -eq 1 ]; then
                 echo "[$(date)] Monitor: STOP + status=idle. Killing claude (PID=$claude_pid)..." | tee -a "$log_file"
                 kill "$claude_pid" 2>/dev/null || true
                 sleep 5
                 kill -9 "$claude_pid" 2>/dev/null || true
                 return 0
             else
-                echo "[$(date)] Monitor: STOP detected, status != idle. Waiting..." | tee -a "$log_file"
+                echo "[$(date)] Monitor: STOP detected, waiting for safe exit (status=${current_status}, saw_non_idle=${saw_non_idle})." | tee -a "$log_file"
             fi
         fi
 
         # 检查 status 是否已变为 idle（研究员完成所有步骤后设置）
-        if check_status_idle; then
+        if [ "$current_status" = "idle" ] && [ "$saw_non_idle" -eq 1 ]; then
             echo "[$(date)] Monitor: status=idle (research complete). Waiting ${POST_COMPLETE_TIMEOUT}s for graceful exit..." | tee -a "$log_file"
             local waited=0
             while kill -0 "$claude_pid" 2>/dev/null && [ "$waited" -lt "$POST_COMPLETE_TIMEOUT" ]; do
@@ -270,6 +419,13 @@ while true; do
         break
     fi
 
+    if [ "$STATUS" = "assigned" ]; then
+        if mark_assigned_in_progress >/dev/null 2>&1; then
+            STATUS="in_progress"
+            echo "[$(date)] Wrapper auto-transitioned assigned -> in_progress" | tee -a "$LOG_FILE"
+        fi
+    fi
+
     # --- 提取组长指令（如有）---
     LEADER_INSTRUCTION=""
     if [ -f "$STATE_FILE" ]; then
@@ -308,7 +464,7 @@ ${LEADER_INSTRUCTION}
     SYSTEM_PROMPT=$(cat "$PROMPT_FILE")
 
     # --- 记录状态文件 mtime ---
-    STATE_MTIME_BEFORE=$(stat -c %Y "$STATE_FILE" 2>/dev/null || echo "0")
+    STATE_MTIME_BEFORE=$(get_state_mtime_ns)
 
     # --- 执行 Claude Code 会话 ---
     echo "[$(date)] Starting Claude Code session (max_turns=${MAX_TURNS}, CPU=${CPU_RANGE})..." | tee -a "$LOG_FILE"
@@ -349,6 +505,9 @@ ${LEADER_INSTRUCTION}
 
     echo "" | tee -a "$LOG_FILE"
     echo "[$(date)] Claude session ended with exit code: ${EXIT_CODE}" | tee -a "$LOG_FILE"
+
+    # --- 报告发送兜底 ---
+    maybe_send_report_fallback "$LOG_FILE"
 
     # --- 提取成本 ---
     CYCLE_COST=$(grep -o '"total_cost_usd":[0-9.]*' "$LOG_FILE" | tail -1 | cut -d: -f2 || true)

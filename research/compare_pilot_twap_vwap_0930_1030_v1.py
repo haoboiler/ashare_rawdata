@@ -12,8 +12,8 @@ import arcticdb
 
 
 ARCTIC_URL = "s3://192.168.2.180:arctic?access=bookdisco&secret=bookdiscono1&port=8122"
-RAW_VALUE_LIB = "ashare@stock@raw_value@1d"
-FEATURE_LIB = "ashare@stock@feature@1d"
+RAW_VALUE_LIB = "ashare@live@stock@raw_value@1d"
+FEATURE_LIB = "ashare@live@stock@feature@1d"
 
 PILOT_TO_LEGACY = {
     "twap_0930_1030_v1": "twap_0930_1030",

@@ -39,13 +39,14 @@ cat orchestration/state/agent_states/{your_agent_id}.yaml
 | status | task_type | 行动 |
 |--------|-----------|------|
 | `idle` / `assigned` | `research` | 检查反馈 → 认领方向（如未分配）→ 开始研究 |
+| `in_progress` | `research` | 持续当前方向研究，不得重新认领或切换方向 |
 | `assigned` | `corr_check` | 读取指定特征 → 执行相关性检测 |
 | `waiting_feedback` | 非 research | 特殊任务等待中，输出状态后退出 |
 | `stopped` | * | 不应被调用，直接退出 |
 
 ### 认领方向
 
-如果 `current_direction` 为 null，需要从方向池认领：
+只有在 `current_direction` 为 null 时，才允许从方向池认领新方向：
 
 ```python
 import sys
@@ -62,6 +63,27 @@ if direction:
         'task_type': 'research',
     })
 ```
+
+### 方向锁（强制）
+
+如果状态文件里已经有 `current_direction` / `current_direction_id`：
+
+- 把它视为**当前 cycle 的固定方向**
+- **禁止**在同一个 cycle 内改成别的方向
+- **禁止**自行修改 `current_direction`、`current_direction_id`、`current_experiment_id`
+- **禁止**自行认领新的方向池条目，除非这 3 个字段一开始就是 null
+
+特别是：
+
+- `status=assigned` 且已有方向：表示 leader 已经给你分配好方向，本轮只能做这个方向
+- `status=in_progress`：表示 wrapper 已经把 leader 分配的任务推进到执行态，本轮继续当前方向，不得切换
+
+如果你认为当前方向已经研究完、需要换方向：
+
+- 完成本轮报告、打包和状态更新
+- 将状态设回 `idle`
+- 在报告或 `notes` 中说明“建议切换方向”
+- **不要**在当前 cycle 内自己跳到下一个方向
 
 ## Step 1: 检查异步反馈
 
@@ -113,13 +135,36 @@ ls -lt research/agent_reports/feedback/ | head -10
 
 ```bash
 cd /home/gkh/claude_tasks/ashare_rawdata
-# 快速验证（100 symbol，~2 分钟）
-python scripts/compute_rawdata_local.py --formula-file {script.py} --quick -o .claude-output/analysis/{direction}/
-# Ray 加速全量（~18 分钟，需先 preload）
+# 推荐快筛：全市场 + 至少 2 年窗口，优先走 evolve driver
+python scripts/evolve_rawdata.py --formula-file {script.py} --use-preload --num-workers 32 --field-preset basic6 --eval-start 2020-01-01 --eval-end 2023-12-31
+# 如需直接快筛：也必须是全市场 + 至少 2 年窗口
+python scripts/compute_rawdata_local.py --formula-file {script.py} --use-preload --num-workers 32 --quick-eval --skip-export --eval-start 2020-01-01 --eval-end 2023-12-31
+# shortlist 之后再导出全量 pkl
 python scripts/compute_rawdata_local.py --formula-file {script.py} --use-preload --num-workers 32 -o .claude-output/analysis/{direction}/
-# 串行全量（无 Ray 时备选，~30-60 分钟）
-python scripts/compute_rawdata_local.py --formula-file {script.py} -o .claude-output/analysis/{direction}/
 ```
+
+说明：
+- screening preload 当前由 `gkh_ray` 专用用户持有；研究员 wrapper 会自动 source `orchestration/researcher_runtime_env.sh`
+- 在研究员会话里，`--use-preload` 通过 `ASHARE_RAWDATA_PRELOAD_RAY_ADDRESS` 连接 dedicated-user preload bridge
+- 用 `bash orchestration/status_rawdata_preload_ray_bridge.sh` 检查当前 bridge / actor 状态
+- **不要**手工硬编码 `RAY_ADDRESS`
+- 非 preload 脚本如果需要本地 Ray，优先显式 `ray.init(address=\"local\")`
+
+**硬性规则**：
+- **禁止** `compute_rawdata_local.py --quick`
+- **禁止** `--symbols` 或任何小股票池抽样快筛
+- 快筛必须使用**全市场**，且 `--eval-start/--eval-end` 覆盖区间**至少 2 年**
+- 默认快筛窗口使用 `2020-01-01` 到 `2023-12-31`
+- 默认快筛 field preset 使用 `basic6`：`close/open/high/low/volume/amount`
+- 正式 `evaluate_rawdata.py` 仍按 `2024-12-31` 截止；不要把 screening preload 窗口和 formal evaluate 截止日混为一谈
+- 只有 shortlist 才进入导出 `pkl` + 正式评估流程
+- **禁止**自行执行 `ray stop`、`ray start`、全局 actor 清理或其他会影响别的 researcher 的基础设施变更
+- **禁止**在 researcher 会话里使用 `--fast` 作为 preload 异常时的降级方案
+- preload 异常时，先确认原来的 compute / evolve 进程已经退出或被你明确终止；**禁止**旧任务还活着时再补跑第二条链路
+- preload 异常时，只允许两种动作：
+  - 对同一个 bundle 改用 `python scripts/compute_rawdata_local.py --use-preload --quick-eval --skip-export ...` 做一次 direct quick-eval fallback
+  - 或停止本轮并在报告 / notes 中明确上报 preload 问题
+- 如果 direct `--use-preload` fallback 仍然失败：停止并上报；**不要**再启动额外的并行 compute 链路
 
 #### Step C: 回测评估
 
@@ -127,7 +172,10 @@ python scripts/compute_rawdata_local.py --formula-file {script.py} -o .claude-ou
 
 #### Step D: 迭代
 
-1. 先 `--quick` 快速排除 → 2. 通过后全量计算 → 3. 全量评估通过 → 打包 pending
+1. 先做**全市场 + 至少 2 年**快筛（优先 `evolve_rawdata.py`）
+2. 通过后导出全量 `pkl`
+3. 用 `python scripts/evaluate_rawdata.py ...` 做正式评估
+4. 正式评估通过 → 打包 pending
 
 ## 报告 YAML Frontmatter 规范（强制）
 

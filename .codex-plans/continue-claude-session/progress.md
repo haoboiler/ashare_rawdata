@@ -1,0 +1,57 @@
+# Progress
+
+- 2026-03-25: Read global instructions, project `CLAUDE.md`, and located the relevant Claude session storage.
+- 2026-03-25: Matched the user's quoted message to session `50b7b016-336a-4bb7-a149-6950620e7af5.jsonl`.
+- 2026-03-25: Recovered the earlier colleague-link prompt from `~/.claude/history.jsonl` and confirmed the target code path `origin/evolve/ashare-hf-var:scripts/evolve_ashare/`.
+- 2026-03-25: Compared `preload.py`, `evolve_actor.py`, and `fast_update.py` against current `scripts/compute_rawdata_local.py`.
+- 2026-03-25: Added project `FOCUS.md` entries for the three prioritized performance improvements.
+- 2026-03-25: Implemented optimization #1 by switching preload storage from in-actor DataFrames to 3D ndarray refs and rewiring `compute_fast_preload` to consume refs directly.
+- 2026-03-25: Ran representative benchmark and confirmed 5.39x compute-phase speedup with exact output equality against both old path and serial baseline.
+- 2026-03-25: Implemented optimization #2 hot path in `scripts/compute_rawdata_local.py`: in-memory `--quick-eval`, optional `--skip-export`, and preload-actor quick-eval context caching.
+- 2026-03-25: Verified the local quick-eval path on `vr_2_0930_1030` over 100 random symbols for 2024 and wrote report `.claude-output/reports/quick_eval/variance_ratio_0930_1030_20260325-011436.json`.
+- 2026-03-25: Recreated the detached preload actor so it exposes the new quick-eval methods; actor-based validation remains pending while the full-market 2024 preload load completes.
+- 2026-03-25: Added `scripts/utils/rawdata_eval.py` and `scripts/evaluate_rawdata.py` to align formal raw-data file evaluation with raw-data timing metadata.
+- 2026-03-25: Updated `scripts/compute_rawdata_local.py` to write `{field}.meta.json` sidecars next to exported raw-data pkl files.
+- 2026-03-25: Validated wrapper sidecar path on `.claude-output/analysis/wrapper_sidecar_quick/vr_2_0930_1030.pkl`; wrapper used `metadata=sidecar` and `t_plus_n=0`.
+- 2026-03-25: Validated wrapper registry fallback on `.claude-output/analysis/registry_fallback_smoke/twap_0930_1030.pkl`; wrapper used `metadata=registry` and `t_plus_n=0`.
+- 2026-03-25: Added `scripts/evolve_rawdata.py` as a thin raw-data evolve driver that reuses existing compute + quick-eval infrastructure.
+- 2026-03-25: Added `docs/EVOLVE.md`, linked it from `docs/COMPUTE.md`, and exposed the new driver in `prompt/startup.md`.
+- 2026-03-25: Validated fixed-candidate batch mode via `.claude-output/evolve/smoke_explicit`.
+- 2026-03-25: Validated generator mode via `.claude-output/evolve/smoke_generator` using a temporary clone generator in `.claude-tmp/evolve_smoke/clone_generator.py`.
+# 2026-03-25 Preload Stability Debug
+
+- Observed researchers violating the intended screening path (`--quick`, then attempted local Ray restart).
+- Patched `orchestration/prompts/researcher.md` to forbid small-universe screening and later to forbid `ray stop/start` or other shared infra mutations.
+- Updated both researcher state files with stricter `leader_instruction`, interrupted the offending runs, and restarted them.
+- Confirmed new compliant processes:
+  - A: `register_cs_spread_0930_1030.py` via `--quick-eval --skip-export --eval-start 2023-01-01 --eval-end 2024-12-31`
+  - B: `register_apm_momentum_0930_1130.py` and `register_apm_momentum_1300_1457.py` via the same full-market 2-year fallback pattern
+- Confirmed remaining blocker: preload actor build/use is unstable and receives `SIGTERM` during actor-side load.
+- Patched `scripts/compute_rawdata_local.py`:
+  - added `.claude-tmp/preload/ashare_rawdata_preload_state.json`
+  - added actor-side `status/start/end/error` metadata and `get_preload_info()`
+  - changed preload behavior from unconditional kill/recreate to reuse-or-wait by default
+  - added `--force-preload-rebuild` for explicit controlled rebuilds only
+  - made `--use-preload` fail fast when actor is loading or unhealthy
+- Validation:
+  - plain `--preload` now raises a clear “Existing preload actor is unresponsive” error instead of trying a dangerous immediate rebuild
+  - force rebuild now logs `Created new preload actor` and remains alive/observable in `status=loading` well past the previous crash window
+  - concurrent `--preload` now logs “waiting for readiness”
+  - `--use-preload` during load now raises `Preload actor is still loading data`
+- 2026-03-25: Prepared dedicated-user preload isolation for a future `gkh_ray` account:
+  - parameterized preload Ray config via environment overrides
+  - parameterized preload state-file path via `ASHARE_RAWDATA_PRELOAD_STATE_PATH`
+  - added `gkh_ray` env/wrapper/provision/access-grant scripts under `orchestration/`
+  - verified new dedicated ports are free and scripts pass `bash -n` / `py_compile`
+  - attempted provisioning, but current session cannot complete `sudo` because a password is required interactively
+- 2026-03-26: Finished the dedicated-user preload migration with the user-created `gkh_ray` account:
+  - granted project ACL access and added `gkh_ray` to `anaconda_group`
+  - shortened the runtime dir to `/home/gkh_ray/rp` to avoid AF_UNIX socket path limits
+  - raised `ulimit -n` before `ray start` so the dedicated cluster no longer dies with `Too many open files`
+  - rebuilt preload successfully on `127.0.0.1:43680`; state file under `/home/gkh_ray/.local/state/ashare_rawdata/ashare_rawdata_preload_state.json` reached `status=ready`
+- 2026-03-26: Added a gkh-side bridge to the dedicated preload cluster:
+  - `orchestration/researcher_runtime_env.sh` now exports `ASHARE_RAWDATA_PRELOAD_RAY_ADDRESS=127.0.0.1:43680`
+  - `orchestration/researcher_wrapper.sh` now sources the runtime env file automatically
+  - `orchestration/status_rawdata_preload_ray_bridge.sh` verifies bridge health from the `gkh` user
+  - granted minimal ACL from `gkh_ray` to `gkh` on `/home/gkh_ray` and `/home/gkh_ray/rp` so gkh-side Ray clients can attach
+- 2026-03-26: Restarted raw-data researchers `ashare_rawdata_a` and `ashare_rawdata_b` on the new wrapper/env and confirmed both can see the dedicated preload bridge as `ray_status=running`; they are still in startup/design phase and have not yet issued the first real `evolve_rawdata.py --use-preload` command.
