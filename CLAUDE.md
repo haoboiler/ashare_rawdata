@@ -4,6 +4,8 @@
 
 ## 快速导航
 
+> 注：`.claude/rules/` 下的文件会自动加载到上下文，无需手动读取。以下导航供人类查阅。
+
 - **当前任务**: → FOCUS.md
 - **硬约束**: → .claude/rules/hard-constraints.md
 - **工作流程**: → .claude/rules/workflow.md
