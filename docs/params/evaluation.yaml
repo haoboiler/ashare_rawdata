@@ -1,0 +1,18 @@
+# 评估参数 SSOT — 修改参数值只改这里
+# project-local.md 中有速查摘要，需同步更新
+
+# === 因子评估门槛 ===
+sharpe_abs_net_min: 0.9       # LS Sharpe 下限
+ir_ls_min: 0.2                # IR(LS) 下限
+long_excess_net_sharpe_min: 0.7  # Long Excess Net Sharpe 下限
+mono_min: 0.7                 # 单调性下限 (8 组)
+coverage_min: 0.3             # 数据覆盖率下限
+
+# === 回测参数 ===
+mode: long_short
+num_groups: 8
+post_process_method: comp
+execution_price_field: twap_1300_1400
+benchmark_index: csi1000
+commission_rate: 0.0001
+neutralize: true
