@@ -1,5 +1,11 @@
 # Workflow
 
+## 进度管理 (FOCUS.md)
+
+- 每次启动读 `FOCUS.md`，了解当前进度和下一步
+- 任务完成后询问用户：「是否需要更新 FOCUS.md？」（勾选完成项、新增待办）
+- 不得未经确认自行修改 FOCUS.md
+
 ## 核心流程
 ```
 物理假设 → Numba 实现 → compute_rawdata_local.py → evaluate.py → admission_corr_check.py → 入库审批
