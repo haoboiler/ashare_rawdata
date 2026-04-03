@@ -3,13 +3,10 @@ project_type: research-auto
 ---
 # ashare_rawdata 项目管理要求
 
-## 关键参数速查
-<!-- source: docs/params/evaluation.yaml — 以 YAML 为准 -->
-- LS Sharpe > 0.9 | IR(LS) > 0.2 | Long Excess Net Sharpe > 0.7 | Mono > 0.7 | 覆盖率 > 30%
-- commission = 0.0001 | execution = twap_1300_1400 | benchmark = csi1000 | neutralize
-- post-process = comp | num-groups = 8 | mode = long_short
-
-如需完整参数或修改值 → docs/params/evaluation.yaml
+## 关键参数
+<!-- SSOT: docs/params/evaluation.yaml — 阈值和回测参数数值只在 YAML 中定义，此处不复制 -->
+→ **所有阈值和回测参数见 `docs/params/evaluation.yaml`**
+→ 指标含义见 `docs/evaluation-standards.md`
 
 ## 研究纪律
 1. 假设驱动，不做无意义数学变换

@@ -23,17 +23,16 @@
 
 ## 评估标准
 
-- LS Sharpe > 0.9, IR(LS) > 0.2, Long Excess Net Sharpe > 0.7, Mono > 0.7, 覆盖率 > 30%
-- 回测: long_short / 8 组 / comp / twap_1300_1400 / csi1000 / 万1+0 / neutralize
-- 相关性: L1 LS PnL |ρ| < 0.6, L2 LB PnL |ρ| < 0.8
+- 筛选阈值和回测参数 → `docs/params/evaluation.yaml`（SSOT）
+- 指标说明 → `docs/evaluation-standards.md`
+- 相关性 gate 阈值 → `docs/params/evaluation.yaml` 中 `corr_gate` 配置
 
 ## 关键路径
 
 - 本地计算: `scripts/compute_rawdata_local.py`（见 `docs/COMPUTE.md`，推荐 `--use-preload`）
 - 进化探索: `scripts/evolve_rawdata.py`（批量候选 / generator 驱动，见 `docs/EVOLVE.md`）
 - 回测评估: `scripts/evaluate_rawdata.py`（封装共享 `evaluate.py`，见 `docs/BACKTEST.md`）
-- 相关性检测: `scripts/admission_corr_check.py --cache .claude-output/pnl_cache/pnl_cache.pkl`
-- PnL 缓存: `.claude-output/pnl_cache/pnl_cache.pkl`（141 fields）
+- 统一入库: `scripts/admit_rawdata.py`（筛选 + 相关性 gate + 打包，读 alpha 侧 cache）
 - 入库流程: `docs/ASHARE_ADMISSION.md`
 
 ## 你的任务

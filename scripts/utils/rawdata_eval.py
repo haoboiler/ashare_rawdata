@@ -20,12 +20,27 @@ MOCK_PACKAGES = PROJECT_ROOT / ".claude-tmp" / "mock_packages"
 RAWDATA_META_VERSION = 1
 DEFAULT_EVAL_START = "2020-01-01"
 DEFAULT_EVAL_END = "2024-12-31"
-DEFAULT_EVAL_MODE = "long_short"
-DEFAULT_EVAL_NUM_GROUPS = 8
-DEFAULT_EVAL_EXECUTION_PRICE_FIELD = "twap_1300_1400"
-DEFAULT_EVAL_BENCHMARK_INDEX = "csi1000"
-DEFAULT_EVAL_POST_PROCESS_METHOD = "comp"
-DEFAULT_EVAL_COMMISSION_RATE = 0.0001
+
+
+def _load_eval_yaml() -> dict:
+    """Load eval params from SSOT YAML. Falls back to hardcoded if file missing."""
+    yaml_path = PROJECT_ROOT / "docs" / "params" / "evaluation.yaml"
+    if yaml_path.exists():
+        import yaml
+        with open(yaml_path) as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
+_EVAL_YAML = _load_eval_yaml()
+
+# SSOT: values loaded from docs/params/evaluation.yaml
+DEFAULT_EVAL_MODE = _EVAL_YAML.get("mode", "long_short")
+DEFAULT_EVAL_NUM_GROUPS = _EVAL_YAML.get("num_groups", 8)
+DEFAULT_EVAL_EXECUTION_PRICE_FIELD = _EVAL_YAML.get("execution_price_field", "twap_1300_1400")
+DEFAULT_EVAL_BENCHMARK_INDEX = _EVAL_YAML.get("benchmark_index", "csi1000")
+DEFAULT_EVAL_POST_PROCESS_METHOD = _EVAL_YAML.get("post_process_method", "comp")
+DEFAULT_EVAL_COMMISSION_RATE = _EVAL_YAML.get("commission_rate", 0.0001)
 DEFAULT_EVAL_STAMP_TAX_RATE = 0.0
 
 

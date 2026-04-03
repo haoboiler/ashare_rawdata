@@ -49,6 +49,15 @@ EVALUATE_WRAPPER = str(PROJECT_ROOT / "scripts" / "evaluate_rawdata.py")
 PYTHON = "/home/b0qi/anaconda3/envs/gkh-ashare/bin/python"
 MOCK_PACKAGES = str(PROJECT_ROOT / ".claude-tmp" / "mock_packages")
 
+# Import eval defaults from SSOT-backed constants
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+from utils.rawdata_eval import (
+    DEFAULT_EVAL_MODE,
+    DEFAULT_EVAL_POST_PROCESS_METHOD,
+    DEFAULT_EVAL_EXECUTION_PRICE_FIELD,
+    DEFAULT_EVAL_BENCHMARK_INDEX,
+)
+
 
 def get_all_rawdata_fields():
     """从 Arctic 获取所有已入库的 raw-data field 名"""
@@ -266,10 +275,10 @@ def _save_cache(path, ls_pnl_dict, lb_pnl_dict, metadata, args, failed):
         "params": {
             "start": args.start,
             "end": args.end,
-            "mode": "long_short",
-            "post_process": "comp",
-            "execution_price": "twap_1300_1400",
-            "benchmark": "csi1000",
+            "mode": DEFAULT_EVAL_MODE,
+            "post_process": DEFAULT_EVAL_POST_PROCESS_METHOD,
+            "execution_price": DEFAULT_EVAL_EXECUTION_PRICE_FIELD,
+            "benchmark": DEFAULT_EVAL_BENCHMARK_INDEX,
         },
         "failed": failed,
         "built_at": datetime.now().isoformat(),

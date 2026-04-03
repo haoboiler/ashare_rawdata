@@ -6,18 +6,21 @@
 
 ## 默认参数一览
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--mode` | `long_short` | 多空模式 |
-| `--benchmark-index` | `csi1000` | 基准指数（合成 TWAP benchmark） |
-| `--execution-price-field` | `twap_1300_1400` | 执行价字段 |
-| `--num-groups` | `8` | 横截面分组数 |
-| `--post-process-method` | `comp` | 截面减中位数 + booksize 归一化 |
-| `--neutralize` | **启用** | 行业 + 市值中性化（同时输出 raw + neutralized） |
-| `--commission-rate` | `0.0001` | 万1 单边佣金 |
-| `--stamp-tax-rate` | `0.0` | 无印花税 |
-| `--start` | `2020-01-01` | 评估起始日期 |
-| `--end` | `2024-12-31` | RawData 回测截止日期 |
+<!-- source: docs/params/evaluation.yaml — 以 YAML 为准 -->
+→ **参数值定义见 `docs/params/evaluation.yaml`（SSOT）**
+
+| 参数 | YAML key | 说明 |
+|------|----------|------|
+| `--mode` | `mode` | 多空模式 |
+| `--benchmark-index` | `benchmark_index` | 基准指数（合成 TWAP benchmark） |
+| `--execution-price-field` | `execution_price_field` | 执行价字段 |
+| `--num-groups` | `num_groups` | 横截面分组数 |
+| `--post-process-method` | `post_process_method` | 截面减中位数 + booksize 归一化 |
+| `--neutralize` | `neutralize` | 行业 + 市值中性化（同时输出 raw + neutralized） |
+| `--commission-rate` | `commission_rate` | 单边佣金 |
+| `--stamp-tax-rate` | — | 无印花税 |
+| `--start` | — | 评估起始日期 |
+| `--end` | — | RawData 回测截止日期 |
 
 ## Python 环境
 
@@ -65,14 +68,18 @@ python scripts/evaluate_rawdata.py \
     --output-dir .claude-output/evaluations/{direction}/{feature_name}/
 ```
 
-## 主指标（详见 evaluation-standards.md）
+## 主指标
 
-| 指标 | stats.json 字段 | 阈值 |
-|------|----------------|------|
-| LS Sharpe | `sharpe_abs_net` | > 0.9 |
-| IR(LS) | `ir_ls` | > 0.2 |
-| Long Excess Net Sharpe | `sharpe_long_excess_net` | > 0.7 |
-| Mono | 分组输出 | > 0.7 |
+<!-- SSOT: docs/params/evaluation.yaml — 阈值数值只在 YAML 中定义 -->
+→ **阈值数值见 `docs/params/evaluation.yaml`**
+→ 指标说明见 `docs/evaluation-standards.md`
+
+| 指标 | stats.json 字段 | YAML key |
+|------|----------------|----------|
+| LS Sharpe | `sharpe_abs_net` | `sharpe_abs_net_min` |
+| IR(LS) | `ir_ls` | `ir_ls_min` |
+| Long Excess Net Sharpe | `sharpe_long_excess_net` | `long_excess_net_sharpe_min` |
+| Mono | 分组输出 | `mono_min` |
 
 ## 注意事项
 

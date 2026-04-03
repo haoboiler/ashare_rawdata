@@ -8,12 +8,12 @@
 
 ## 核心流程
 ```
-物理假设 → Numba 实现 → compute_rawdata_local.py → evaluate.py → admission_corr_check.py → 入库审批
+物理假设 → Numba 实现 → compute_rawdata_local.py → evaluate.py → admit_rawdata.py → 入库审批
 ```
 
 - **本地计算**: `docs/COMPUTE.md`（推荐 Ray 加速 `--use-preload`，需先 `--preload`）
 - **回测评估**: `docs/BACKTEST.md`（必须用 `gkh-ashare` 环境 python + mock_packages）
-- **相关性检测**: `python scripts/admission_corr_check.py --factors {pkl} --cache .claude-output/pnl_cache/pnl_cache.pkl`
+- **统一入库**: `python scripts/admit_rawdata.py --feature-name {name} --pkl {pkl} --eval-dir {dir}`（含自动筛选 + 相关性 gate + 打包）
 - **入库流程**: `docs/ASHARE_ADMISSION.md`
 
 ## 知识检索（三层架构）

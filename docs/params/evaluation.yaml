@@ -1,5 +1,5 @@
 # 评估参数 SSOT — 修改参数值只改这里
-# project-local.md 中有速查摘要，需同步更新
+# 所有 .md 文件仅引用本文件，不复制数值
 
 # === 因子评估门槛 ===
 sharpe_abs_net_min: 0.9       # LS Sharpe 下限
@@ -16,3 +16,22 @@ execution_price_field: twap_1300_1400
 benchmark_index: csi1000
 commission_rate: 0.0001
 neutralize: true
+
+# === 相关性 Gate 阈值 ===
+# 用于 admit_rawdata.py 的可插拔 gate
+corr_gate:
+  default_gate: pairwise        # pairwise | incremental_sharpe
+  pairwise:
+    ls_threshold: 0.60          # max |ρ(LS PnL)| 上限
+    lb_threshold: 0.80          # max |ρ(Long-Benchmark PnL)| 上限
+  incremental_sharpe:
+    threshold: 0.30             # 增量 Sharpe 下限
+
+# === Alpha 侧 Official Cache ===
+# rawdata 不维护自己的 pnl cache，直接读取 alpha 侧数据
+alpha_official_cache:
+  project_root: /home/gkh/claude_tasks/ashare_alpha
+  composite_root: .claude-tmp/pnl_cache/official_composite
+  # bucket 由 execution_price_field 决定:
+  #   twap_0930_1030 → am
+  #   twap_1300_1400 → pm

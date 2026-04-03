@@ -4,6 +4,7 @@
 orchestration/state/
 orchestration/logs/
 orchestration/config.yaml
+orchestration/v2/config.yaml
 __pycache__/
 *.pyc
 FOCUS.md

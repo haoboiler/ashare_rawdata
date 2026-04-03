@@ -210,54 +210,27 @@ submitted_at: "2026-03-19T05:00:00"
 
 **硬性要求**：覆盖至 2024 年后 | 无 >30 天连续缺失 | A 股 1m 数据从 2020 年开始
 
-### 3.1 自动筛选阈值
+### 3.1 自动筛选 + 打包（使用脚本）
 
-> 详见 `docs/evaluation-standards.md`
-
-对每个评估完毕的特征，检查是否通过以下**全部**阈值：
-
-| 指标 | 阈值 | stats.json 字段 |
-|------|------|----------------|
-| 数据覆盖率 | > 30% | 因子 pkl 非 NaN 占比 |
-| LS Sharpe | > 0.9 | `sharpe_abs_net` |
-| IR(LS) | > 0.2 | `ir_ls` |
-| Long Excess Net Sharpe | > 0.7 | `sharpe_long_excess_net` |
-| Mono | > 0.7 | 分组回测单调性评分 |
-
-**注意**：
-- 取绝对值判断 IC/IR 方向（因子方向可能与预期相反）
-- Mono 需要完整评估（不能用 `--quick`）
-- raw 和 neutralized 两组都要检查，任一组通过即可
-
-### 3.2 相关性检测（通过 3.1 后执行，参考）
-
-如果 ashare_alpha 已有因子池，检查新因子与已有因子的相关性。
-相关性检测结果仅供参考，不作为自动筛选的 pass/fail 条件，最终由用户审批时决定。
-
-### 3.4 创建 Pending Package（全部通过后）
-
-如果特征通过 3.1 + 3.2 的所有自动阈值：
+**禁止手动比较阈值**，使用自动化脚本：
 
 ```bash
-FEAT_DIR="research/pending-rawdata/{feature_name}"
-mkdir -p "$FEAT_DIR/eval_charts"
-
-# 1. 复制初筛报告
-cp research/agent_reports/screening/{report}.md "$FEAT_DIR/report.md"
-
-# 2. 复制评估图表 (w1)
-cp .claude-output/evaluations/{direction}/{feature_name}/charts/pnl_curve.png "$FEAT_DIR/eval_charts/w1_pnl_curve.png"
-cp .claude-output/evaluations/{direction}/{feature_name}/charts/group_pnl_curves.png "$FEAT_DIR/eval_charts/w1_group_pnl.png"
-
-# 3. 符号链接因子 pickle
-ln -sf "$(pwd)/.claude-output/analysis/{direction}/{feature_name}.pkl" "$FEAT_DIR/factor_values.pkl"
-
-# 4. 生成注册脚本草案（基于 ASHARE_ADMISSION.md 模板）
-
-# 5. 生成 README
+# 一键：筛选 + 相关性检查 + 打包
+python scripts/admit_rawdata.py \
+    --feature-name {feature_name} \
+    --pkl .claude-output/analysis/{direction}/{feature_name}.pkl \
+    --eval-dir .claude-output/evaluations/{direction}/{feature_name}/ \
+    --report research/agent_reports/screening/{report}.md \
+    --direction "D-XXX (name)" --agent-id {your_agent_id}
 ```
 
-### 3.5 如果没有特征通过自动筛选
+阈值从 `docs/params/evaluation.yaml` (SSOT) 自动读取。
+相关性检查自动读取 alpha 侧 official cache，无需手动维护 pnl_cache。
+
+**如果 admit_rawdata.py 返回 PASSED**：pending package 已自动创建。
+**如果返回 REJECTED**：根据输出中的失败原因写诊断报告。
+
+### 3.2 如果没有特征通过
 
 写失败诊断到 `research/agent_reports/screening/`，**必须包含完整的 YAML frontmatter**（见上方规范），其中：
 - `status: screening_failed`
