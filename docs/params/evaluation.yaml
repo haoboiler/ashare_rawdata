@@ -19,11 +19,12 @@ neutralize: true
 
 # === 相关性 Gate 阈值 ===
 # 用于 admit_rawdata.py 的可插拔 gate
+# 两层均为硬性 gate，只比较 Long-Short PnL（与 benchmark 无关）
 corr_gate:
   default_gate: pairwise        # pairwise | incremental_sharpe
   pairwise:
-    ls_threshold: 0.60          # max |ρ(LS PnL)| 上限
-    lb_threshold: 0.80          # max |ρ(Long-Benchmark PnL)| 上限
+    rawdata_ls_threshold: 0.60  # vs rawdata pool: max |ρ(LS PnL)| 上限（内部去重）
+    alpha_ls_threshold: 0.70    # vs alpha pool:   max |ρ(LS PnL)| 上限（跨池硬性 gate）
   incremental_sharpe:
     threshold: 0.30             # 增量 Sharpe 下限
 

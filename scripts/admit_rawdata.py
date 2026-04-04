@@ -69,6 +69,30 @@ def _execution_price_to_bucket(execution_price_field: str) -> str:
     return 'pm'
 
 
+def _load_rawdata_pnl_pool() -> pd.DataFrame:
+    """加载 rawdata 内部 LS PnL pool（来自 .claude-output/pnl_cache/pnl_cache.pkl）"""
+    cache_path = PROJECT_ROOT / '.claude-output' / 'pnl_cache' / 'pnl_cache.pkl'
+    if not cache_path.exists():
+        return pd.DataFrame()
+    with open(cache_path, 'rb') as f:
+        data = pickle.load(f)
+    if isinstance(data, dict):
+        return data.get('ls_pnl', pd.DataFrame())
+    return pd.DataFrame()
+
+
+def _load_alpha_pnl_pool(alpha_root: str, composite_root: str, bucket: str) -> pd.DataFrame:
+    """加载 alpha 侧 official cache 的 LS PnL pool（pnl_ls_df）"""
+    bundle_path = Path(alpha_root) / composite_root / bucket / 'bundle.pkl'
+    if not bundle_path.exists():
+        return pd.DataFrame()
+    with open(bundle_path, 'rb') as f:
+        data = pickle.load(f)
+    if isinstance(data, dict):
+        return data.get('pnl_ls_df', pd.DataFrame())
+    return pd.DataFrame()
+
+
 def _load_pnl_from_eval(eval_dir: Path) -> tuple:
     """
     从评估产出中加载 PnL 序列。
@@ -127,7 +151,13 @@ def run_gate(
     config: dict,
 ) -> 'GateResult':
     """
-    运行相关性 gate。
+    运行相关性 gate（两层，均为硬性 gate，LS PnL only）。
+
+    pairwise gate 两层：
+      Layer 1 — vs rawdata pool: 内部去重 (rawdata_ls_threshold)
+      Layer 2 — vs alpha pool:   跨池硬性 gate (alpha_ls_threshold)
+
+    任一层失败则整体 rejected。
 
     Args:
         eval_dir: 评估输出目录
@@ -135,7 +165,7 @@ def run_gate(
         config: evaluation.yaml 的完整配置
 
     Returns:
-        GateResult
+        GateResult（combined，包含两层 metrics）
     """
     from admit_gates import GateResult
 
@@ -145,32 +175,25 @@ def run_gate(
     composite_root = alpha_cache_config.get('composite_root', '')
     bucket = _execution_price_to_bucket(config.get('execution_price_field', 'twap_1300_1400'))
 
-    if not alpha_root or not Path(alpha_root).exists():
+    # 加载候选因子的 LS PnL
+    _, pnl_ls = _load_pnl_from_eval(eval_dir)
+
+    if pnl_ls is None:
         return GateResult(
             admitted=True,
-            reason=f"Alpha 项目不存在 ({alpha_root})，跳过相关性检查",
-            metrics={'alpha_project_exists': False},
-        )
-
-    # 加载 PnL
-    pnl, pnl_ls = _load_pnl_from_eval(eval_dir)
-
-    if pnl is None and pnl_ls is None:
-        return GateResult(
-            admitted=True,
-            reason="评估产出中无 PnL 序列，跳过相关性检查（仅供参考）",
-            metrics={'pnl_available': False},
+            reason="评估产出中无 LS PnL 序列，跳过相关性检查",
+            metrics={'pnl_ls_available': False},
         )
 
     if gate_type == 'incremental_sharpe':
         from admit_gates.incremental_sharpe import check_gate
-        if pnl_ls is None:
+        threshold = corr_config.get('incremental_sharpe', {}).get('threshold', 0.30)
+        if not alpha_root or not Path(alpha_root).exists():
             return GateResult(
                 admitted=True,
-                reason="无 LS PnL 序列，无法做增量 Sharpe 检查",
-                metrics={'pnl_ls_available': False},
+                reason=f"Alpha 项目不存在 ({alpha_root})，跳过增量 Sharpe 检查",
+                metrics={'alpha_project_exists': False},
             )
-        threshold = corr_config.get('incremental_sharpe', {}).get('threshold', 0.30)
         return check_gate(
             rawdata_pnl_ls=pnl_ls,
             threshold=threshold,
@@ -182,18 +205,48 @@ def run_gate(
     elif gate_type == 'pairwise':
         from admit_gates.pairwise import check_gate
         pw_config = corr_config.get('pairwise', {})
-        ls_threshold = pw_config.get('ls_threshold', 0.60)
-        lb_threshold = pw_config.get('lb_threshold', 0.80)
+        rawdata_threshold = pw_config.get('rawdata_ls_threshold', 0.60)
+        alpha_threshold = pw_config.get('alpha_ls_threshold', 0.70)
 
-        return check_gate(
-            rawdata_pnl=pnl if pnl is not None else pnl_ls,
-            rawdata_pnl_ls=pnl_ls,
-            ls_threshold=ls_threshold,
-            lb_threshold=lb_threshold,
-            alpha_project_root=alpha_root,
-            composite_root=composite_root,
-            bucket=bucket,
+        combined_metrics = {}
+
+        # Layer 1: vs rawdata pool (内部去重)
+        rawdata_pool = _load_rawdata_pnl_pool()
+        r1 = check_gate(
+            candidate_pnl_ls=pnl_ls,
+            pool_df=rawdata_pool,
+            threshold=rawdata_threshold,
+            gate_label='rawdata_pool',
         )
+        combined_metrics['layer1_rawdata'] = r1.metrics
+        if not r1.admitted:
+            return GateResult(
+                admitted=False,
+                reason=f"Layer1 {r1.reason}",
+                metrics=combined_metrics,
+            )
+
+        # Layer 2: vs alpha pool (跨池硬性 gate)
+        if not alpha_root or not Path(alpha_root).exists():
+            combined_metrics['layer2_alpha'] = {'skipped': True, 'reason': f'alpha_root不存在: {alpha_root}'}
+            return GateResult(
+                admitted=True,
+                reason=f"Layer1 {r1.reason} | Layer2 skipped (alpha_root不存在)",
+                metrics=combined_metrics,
+            )
+
+        alpha_pool = _load_alpha_pnl_pool(alpha_root, composite_root, bucket)
+        r2 = check_gate(
+            candidate_pnl_ls=pnl_ls,
+            pool_df=alpha_pool,
+            threshold=alpha_threshold,
+            gate_label='alpha_pool',
+        )
+        combined_metrics['layer2_alpha'] = r2.metrics
+
+        admitted = r2.admitted
+        reason = f"Layer1 {r1.reason} | Layer2 {r2.reason}"
+        return GateResult(admitted=admitted, reason=reason, metrics=combined_metrics)
 
     else:
         return GateResult(
@@ -347,9 +400,18 @@ def main():
             g = result['gate']
             print(f"  Correlation Gate ({g['gate_type']}): {'✅' if g['admitted'] else '❌'} {g['reason']}")
             if g.get('metrics'):
-                for k, v in g['metrics'].items():
-                    if k not in ('cache_exists', 'pnl_available', 'alpha_project_exists'):
-                        print(f"    {k}: {v}")
+                for layer_key in ('layer1_rawdata', 'layer2_alpha'):
+                    layer = g['metrics'].get(layer_key)
+                    if layer and isinstance(layer, dict):
+                        label = 'rawdata_pool' if 'rawdata' in layer_key else 'alpha_pool'
+                        skip = layer.get('skipped') or layer.get('pool_empty')
+                        rho = layer.get('max_rho_ls', '')
+                        thr = layer.get('threshold', '')
+                        sim = layer.get('most_similar', '')
+                        if skip:
+                            print(f"    {label}: skipped")
+                        else:
+                            print(f"    {label}: max|ρ|={rho}, threshold={thr}, most_similar={sim}")
 
         if result.get('package_dir'):
             print(f"\n  Package: {result['package_dir']}")

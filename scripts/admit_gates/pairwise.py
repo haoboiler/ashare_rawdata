@@ -1,42 +1,16 @@
 """
-Pairwise ρ Gate — 基于 PnL 相关性的冗余检测
+Pairwise ρ Gate — LS PnL 相关性检查（通用）
 
-对 rawdata 因子的 PnL 与 alpha 侧 official cache 中所有已入库 alpha 做 pairwise 相关性检查。
-直接读取 alpha 侧 official cache (bundle.pkl)，不维护自己的 cache。
+只比较 Long-Short PnL（benchmark 无关），用于两个场景：
+  Layer 1 — vs rawdata pool: 内部去重，阈值 rawdata_ls_threshold (default 0.60)
+  Layer 2 — vs alpha pool:   跨池硬性 gate，阈值 alpha_ls_threshold (default 0.70)
 
 阈值从 evaluation.yaml → corr_gate.pairwise 读取。
 """
 
-import sys
-from pathlib import Path
-from typing import Optional
-
-import numpy as np
 import pandas as pd
 
 from . import GateResult
-
-
-def _load_alpha_cache(alpha_project_root: str, composite_root: str, bucket: str):
-    """
-    加载 alpha 侧 official cache。
-
-    Returns:
-        dict with keys: pnl_df, pnl_ls_df, ic_df, metadata
-        或 None（cache 不存在）
-    """
-    import pickle
-
-    cache_dir = Path(alpha_project_root) / composite_root / bucket
-    bundle_path = cache_dir / 'bundle.pkl'
-
-    if not bundle_path.exists():
-        return None
-
-    with open(bundle_path, 'rb') as f:
-        data = pickle.load(f)
-
-    return data
 
 
 def _max_abs_corr(new_series: pd.Series, pool_df: pd.DataFrame) -> tuple[float, str]:
@@ -44,7 +18,6 @@ def _max_abs_corr(new_series: pd.Series, pool_df: pd.DataFrame) -> tuple[float, 
     if pool_df.empty:
         return 0.0, ''
 
-    # 对齐索引
     combined = pool_df.copy()
     combined['__new__'] = new_series
     combined = combined.dropna(subset=['__new__'])
@@ -63,81 +36,52 @@ def _max_abs_corr(new_series: pd.Series, pool_df: pd.DataFrame) -> tuple[float, 
 
 
 def check_gate(
-    rawdata_pnl: pd.Series,
-    rawdata_pnl_ls: Optional[pd.Series],
+    candidate_pnl_ls: pd.Series,
+    pool_df: pd.DataFrame,
     *,
-    ls_threshold: float,
-    lb_threshold: float,
-    alpha_project_root: str,
-    composite_root: str,
-    bucket: str,
+    threshold: float,
+    gate_label: str = '',
 ) -> GateResult:
     """
-    执行 pairwise ρ gate 检查。
+    执行 pairwise ρ gate 检查（LS PnL only）。
 
     Args:
-        rawdata_pnl: Raw-data 因子的 Long-Benchmark PnL 序列
-        rawdata_pnl_ls: Raw-data 因子的 Long-Short PnL 序列（可选）
-        ls_threshold: LS PnL max |ρ| 上限
-        lb_threshold: Long-Benchmark PnL max |ρ| 上限
-        alpha_project_root: alpha 项目根目录
-        composite_root: official cache 相对路径
-        bucket: 'am' 或 'pm'
+        candidate_pnl_ls: 候选因子的 Long-Short PnL 序列
+        pool_df: pool 中所有已入库因子的 LS PnL (columns=因子名, index=日期)
+        threshold: max |ρ| 上限，超过则拒绝
+        gate_label: 日志标签，用于区分 'rawdata_pool' 或 'alpha_pool'
 
     Returns:
         GateResult
     """
-    cache = _load_alpha_cache(alpha_project_root, composite_root, bucket)
+    label = f"[{gate_label}] " if gate_label else ""
 
-    if cache is None:
+    if pool_df.empty:
         return GateResult(
             admitted=True,
-            reason=f"Alpha cache 不存在 ({bucket})，跳过相关性检查",
-            metrics={'num_compared': 0, 'cache_exists': False},
+            reason=f"{label}Pool 为空，跳过相关性检查",
+            metrics={'num_compared': 0, 'pool_empty': True, 'gate_label': gate_label},
         )
 
-    pnl_df = cache.get('pnl_df', pd.DataFrame())
-    pnl_ls_df = cache.get('pnl_ls_df', pd.DataFrame())
-    n_alphas = len(pnl_df.columns)
+    max_rho, most_similar = _max_abs_corr(candidate_pnl_ls, pool_df)
+    n = len(pool_df.columns)
 
-    if n_alphas == 0:
-        return GateResult(
-            admitted=True,
-            reason="Alpha pool 为空，跳过相关性检查",
-            metrics={'num_compared': 0, 'cache_exists': True},
-        )
+    metrics = {
+        'gate_label': gate_label,
+        'num_compared': n,
+        'max_rho_ls': round(max_rho, 4),
+        'most_similar': most_similar,
+        'threshold': threshold,
+    }
 
-    metrics = {'num_compared': n_alphas, 'cache_exists': True}
-
-    # L2b: Long-Benchmark PnL
-    max_rho_lb, most_similar_lb = _max_abs_corr(rawdata_pnl, pnl_df)
-    metrics['max_rho_lb'] = round(max_rho_lb, 4)
-    metrics['most_similar_lb'] = most_similar_lb
-    metrics['lb_threshold'] = lb_threshold
-
-    lb_passed = max_rho_lb < lb_threshold
-
-    # L2a: LS PnL（如果提供）
-    ls_passed = True
-    if rawdata_pnl_ls is not None and not pnl_ls_df.empty:
-        max_rho_ls, most_similar_ls = _max_abs_corr(rawdata_pnl_ls, pnl_ls_df)
-        metrics['max_rho_ls'] = round(max_rho_ls, 4)
-        metrics['most_similar_ls'] = most_similar_ls
-        metrics['ls_threshold'] = ls_threshold
-        ls_passed = max_rho_ls < ls_threshold
-
-    admitted = lb_passed and ls_passed
+    admitted = max_rho < threshold
 
     if admitted:
-        reason = f"通过: max|ρ_LB|={max_rho_lb:.3f}<{lb_threshold}"
-        if rawdata_pnl_ls is not None:
-            reason += f", max|ρ_LS|={metrics.get('max_rho_ls', 0):.3f}<{ls_threshold}"
+        reason = f"{label}通过: max|ρ_LS|={max_rho:.3f} < {threshold} (n={n})"
     else:
-        reasons = []
-        if not lb_passed:
-            reasons.append(f"max|ρ_LB|={max_rho_lb:.3f}>={lb_threshold} (most_similar: {most_similar_lb})")
-        if not ls_passed:
-            reasons.append(f"max|ρ_LS|={metrics.get('max_rho_ls', 0):.3f}>={ls_threshold} (most_similar: {metrics.get('most_similar_ls', '')})")
-        reason = f"冗余: {'; '.join(reasons)}"
+        reason = (
+            f"{label}冗余: max|ρ_LS|={max_rho:.3f} >= {threshold}"
+            f" (most_similar: {most_similar}, n={n})"
+        )
 
     return GateResult(admitted=admitted, reason=reason, metrics=metrics)
