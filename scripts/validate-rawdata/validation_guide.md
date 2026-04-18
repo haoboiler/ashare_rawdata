@@ -67,9 +67,9 @@ check_extremes(fields)
 ```python
 import sys
 sys.path.insert(0, "/home/gkh/claude_tasks/ashare_rawdata/scripts/validate-rawdata")
-sys.path.insert(0, "/home/gkh/ashare")
+sys.path.insert(0, "/home/gkh/ashare/casimir_ashare")
 from validate_rawdata_bundle import check_price_range, check_coverage, check_extremes
-from ashare_hf_variable.registry import list_definitions
+from casimir.core.ashare_rawdata.registry import list_definitions
 import re
 
 bundle_name = "pv_stats_0930_1030"  # 替换为目标 bundle

@@ -10,5 +10,8 @@
 | 资源 | 路径 |
 |------|------|
 | casimir_ashare | `/home/gkh/ashare/casimir_ashare` |
-| ashare_hf_variable | `/home/gkh/ashare/ashare_hf_variable` |
+| rawdata package | `casimir.core.ashare_rawdata`（在 casimir_ashare 仓库内；2026-03-18 从 `ashare_hf_variable` 迁入，旧包已废弃） |
+| rawdata updater CLI | `/home/gkh/ashare/ashare_update/scripts/aggregate/update_ashare_rawdata.py` |
 | evaluate.py | `/home/gkh/claude_tasks/ashare_alpha/backtest/evaluate.py`（**不要修改**） |
+
+**废弃目录**：`/home/gkh/ashare/ashare_hf_variable/`（dead code，cron 不会读）；`/home/gkh/ashare/ashare_hf_variable_v2/`（本轮 PoC 分支副本）；`/home/gkh/ashare/ashare_hf_variable.bak.*/`（合入前备份）。

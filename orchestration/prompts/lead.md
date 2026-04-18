@@ -186,7 +186,7 @@ mv research/pending-rawdata/{feat}/ research/rejected-rawdata/{feat}/
 3. Python 必须使用：`/home/b0qi/anaconda3/envs/gkh-ashare/bin/python`
 4. 用户手动确认后执行 `--register`
 
-**注意**：入库方式与 crypto rawdata 不同，A 股使用 `ashare_hf_variable` 的 `upsert_definition()` + updater，不是 `add_hf_alpha()`。
+**注意**：入库方式与 crypto rawdata 不同，A 股使用 `casimir.core.ashare_rawdata` 的 `upsert_definition()` + updater（2026-03-18 起，从旧的 `ashare_hf_variable` 包迁入），不是 `add_hf_alpha()`。
 
 ### 9. 发送 TG 通知
 

@@ -18,12 +18,18 @@
 
 ## 1. 先记住现在的架构
 
+> **迁移提示**（2026-03-18 起）：生产 rawdata 包已从 `ashare_hf_variable`
+> 迁到 `casimir.core.ashare_rawdata`。旧包 `/home/gkh/ashare/ashare_hf_variable/`
+> 是 dead code，**不要再改它**，改动也不会影响 cron。所有 import 都用
+> `from casimir.core.ashare_rawdata import …`，CLI 用
+> `/home/gkh/ashare/ashare_update/scripts/aggregate/update_ashare_rawdata.py`。
+
 ### 1.1 输入、定义、输出分别在哪里
 
 - canonical source raw:
   - `ashare@live@stock@kline@1m`
 - generated rawdata registry:
-  - `ashare_hf_variable` 包
+  - `casimir.core.ashare_rawdata` 包（在 `casimir_ashare` 仓库中）
   - 当前默认 registry backend 可以是 JSON fallback，也可以是 Mongo
 - canonical generated rawdata:
   - `ashare@live@stock@raw_value@1d`
@@ -49,8 +55,8 @@
 
 相关代码：
 
-- `/home/gkh/ashare/ashare_hf_variable/updater.py`
-- `/home/gkh/ashare/ashare_hf_variable/scripts/update_ashare_rawdata.py`
+- `/home/gkh/ashare/casimir_ashare/casimir/core/ashare_rawdata/updater.py`
+- `/home/gkh/ashare/ashare_update/scripts/aggregate/update_ashare_rawdata.py`（生产 CLI 入口）
 - `/home/gkh/ashare/casimir_ashare/casimir/core/market/ashare.py`
 
 ## 2. 什么时候适合做成 generated rawdata
@@ -184,7 +190,38 @@ params:
 - 因子研究和日度对齐，通常用 `hfq`
 - 更接近真实成交价的口径，才考虑 `origin`
 
-### 3.8 是否需要一个函数产出多个字段
+### 3.8 `history_days` / `pad_mode` / `max_bars`（历史窗口字段）
+
+默认都不用管 —— `history_days=0`，`pad_mode="none"`，公式签名还是 `apply_func(inputs)`，`inputs[i]` 是当日 1D 分钟数组。
+
+如果字段计算需要**过去 N 日历史**（N ≤ 25），就设：
+
+```python
+history_days=20,               # 过去 20 天 + 当天 = 21 行
+pad_mode="slot_aligned",       # 或 "packed"
+max_bars=240,                  # slot_aligned 必须等于 input_time_filter 的总分钟数
+```
+
+此时框架给公式传的 `inputs[i]` 是 `(history_days+1, max_bars)` 的 2D numpy，行 0 最老，行 N 当天；缺失 bar 是 `NaN`。历史天里 invalid（bar 不足 `expected_bars`）整行填 NaN，但不跳过目标日 —— 公式自己按最小有效天数判断；当日 invalid 则跳过整个目标日。
+
+`pad_mode` 两个合法值：
+
+| 值 | 语义 | 何时用 |
+|---|---|---|
+| `packed` | 有效 bar 压到前排，末尾 NaN 补齐 | 日内顺序/累积算法（cummax、cumsum），不关心 slot 对齐 |
+| `slot_aligned` | 按分钟 slot 索引填位置，缺位 NaN | 跨日同分钟 slot 聚合（例如过去 20 日同一 slot 的 amount 均值/方差） |
+
+约束：
+- `history_days > 0` → `pad_mode` 必须是 `packed` / `slot_aligned`（不能 `none`）
+- `pad_mode="slot_aligned"` → 必须有 `input_time_filter`，且 `max_bars` == window 的理论 bar 数
+- `history_days > 0` 时**不允许** `daily_input_names`（两套契约尚未合并）
+
+参考实现：
+
+- `research/basic_rawdata/hf_pv_corr_illiq_20d/register_hf_pv_corr_illiq_20d.py`（`history_days=20`，`slot_aligned`）
+- `research/basic_rawdata/hf_longshort_battle/register_hf_longshort_battle.py`（`history_days=0`，`none`）
+
+### 3.9 是否需要一个函数产出多个字段
 
 如果多个字段：
 
@@ -305,7 +342,8 @@ def apply_func(inputs):
 最小模板如下：
 
 ```python
-from ashare_hf_variable.models import AShareRawDataDefinition, RawDataParams, RawDataSlot
+from casimir.core.ashare_rawdata.models import AShareRawDataDefinition, RawDataParams, RawDataSlot
+from casimir.core.ashare_rawdata.registry import upsert_definition
 
 definition = AShareRawDataDefinition(
     name="pilot_twap_vwap_0930_1030_v1",
@@ -357,7 +395,7 @@ Python 必须使用：
 
 入口脚本：
 
-- `/home/gkh/ashare/ashare_hf_variable/scripts/update_ashare_rawdata.py`
+- `/home/gkh/ashare/ashare_update/scripts/aggregate/update_ashare_rawdata.py`
 
 ### 6.1 小范围 smoke run
 
@@ -372,7 +410,7 @@ Python 必须使用：
 
 ```bash
 /home/b0qi/anaconda3/envs/gkh-ashare/bin/python \
-  /home/gkh/ashare/ashare_hf_variable/scripts/update_ashare_rawdata.py \
+  /home/gkh/ashare/ashare_update/scripts/aggregate/update_ashare_rawdata.py \
   --slot midday \
   --fields pilot_twap_vwap_0930_1030_v1 \
   --symbols 000001.SZ 000002.SZ 000004.SZ 000006.SZ \
@@ -387,7 +425,7 @@ Python 必须使用：
 
 ```bash
 /home/b0qi/anaconda3/envs/gkh-ashare/bin/python \
-  /home/gkh/ashare/ashare_hf_variable/scripts/update_ashare_rawdata.py \
+  /home/gkh/ashare/ashare_update/scripts/aggregate/update_ashare_rawdata.py \
   --slot midday \
   --fields pilot_twap_vwap_0930_1030_v1 \
   --full-history \
